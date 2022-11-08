@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 use bevy::time::FixedTimestep;
+use bevy::utils::HashMap;
 use rand::prelude::random;
 
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
+const SNAKE_SEGMENT_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
 const FOOD_COLOR: Color = Color::rgb(1.0, 0.0, 1.0);
 const ARENA_WIDTH: u32 = 10;
 const ARENA_HEIGHT: u32 = 10;
@@ -10,13 +12,17 @@ const ARENA_HEIGHT: u32 = 10;
 #[derive(Component)]
 struct SnakeHead {
     input_direction: Direction,
-    direction: Direction
+    direction: Direction,
+    tail: Vec<Entity>,
 }
+
+#[derive(Component)]
+struct Tail;
 
 #[derive(Component)]
 struct Food;
 
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash)]
 struct Position {
     x: i32,
     y: i32,
@@ -65,13 +71,16 @@ fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
     }
 }
 
-fn position_translation(windows: Res<Windows>, mut q: Query<(&mut Position, &mut Transform), Changed<Position>>) {
+fn position_translation(
+    windows: Res<Windows>,
+    mut q: Query<(&mut Position, &mut Transform, Option<&SnakeHead>)>, /*, Changed<Position>> */
+) {
     fn convert(pos: f32, bound_window: f32, bound_game: f32) -> f32 {
         let tile_size = bound_window / bound_game;
         pos / bound_game * bound_window - (bound_window / 2.) + (tile_size / 2.)
     }
     if let Some(window) = windows.get_primary() {
-        for (mut pos, mut transform) in q.iter_mut() {
+        for (mut pos, mut transform, head) in q.iter_mut() {
             if pos.x >= ARENA_WIDTH as i32 {
                 pos.x = 0;
             } else if pos.x < 0 {
@@ -84,10 +93,12 @@ fn position_translation(windows: Res<Windows>, mut q: Query<(&mut Position, &mut
                 pos.y = ARENA_HEIGHT as i32 - 1;
             }
 
+            let z = if let Some(_) = head { 1.0 } else { 0.0 };
+
             transform.translation = Vec3::new(
                 convert(pos.x as f32, window.width() as f32, ARENA_WIDTH as f32),
                 convert(pos.y as f32, window.height() as f32, ARENA_HEIGHT as f32),
-                0.0,
+                z,
             );
         }
     }
@@ -106,9 +117,29 @@ fn spawn_snake(mut commands: Commands) {
             },
             ..default()
         })
-        .insert(SnakeHead { input_direction: Direction::Right, direction: Direction::Right })
+        .insert(SnakeHead {
+            input_direction: Direction::Right,
+            direction: Direction::Right,
+            tail: vec![],
+        })
         .insert(Position { x: 3, y: 3 })
         .insert(Size::square(0.8));
+}
+
+#[inline]
+fn spawn_tail(commands: &mut Commands, position: Position) -> Entity {
+    commands
+        .spawn_bundle(SpriteBundle {
+            sprite: Sprite {
+                color: SNAKE_SEGMENT_COLOR,
+                ..default()
+            },
+            ..default()
+        })
+        .insert(Tail)
+        .insert(position)
+        .insert(Size::square(0.7))
+        .id()
 }
 
 fn spawn_food(mut commands: Commands) {
@@ -128,7 +159,7 @@ fn spawn_food(mut commands: Commands) {
         .insert(Size::square(0.8));
 }
 
-fn snake_movement_input(keys: Res<Input<KeyCode>>,  mut head_positions: Query<&mut SnakeHead>) {
+fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mut SnakeHead>) {
     for mut head in head_positions.iter_mut() {
         let dir: Direction = if keys.pressed(KeyCode::Left) {
             Direction::Left
@@ -149,8 +180,31 @@ fn snake_movement_input(keys: Res<Input<KeyCode>>,  mut head_positions: Query<&m
 
 fn snake_movement(
     mut head_positions: Query<(&mut Position, &mut SnakeHead)>,
+    mut positions: Query<&mut Position, Without<SnakeHead>>,
 ) {
     for (mut position, mut head) in head_positions.iter_mut() {
+        // Tail
+        for (i, tail) in head.tail.iter().enumerate().rev() {
+            if i == 0 {
+                let mut pos = positions.get_mut(*tail).unwrap();
+                pos.x = position.x;
+                pos.y = position.y;
+            } else {
+                let next_x;
+                let next_y;
+                // Beat borrow checker
+                {
+                    let next_pos = positions.get(head.tail[i - 1]).unwrap();
+                    next_x = next_pos.x;
+                    next_y = next_pos.y;
+                }
+                let mut pos = positions.get_mut(*tail).unwrap();
+                pos.x = next_x;
+                pos.y = next_y;
+            }
+        }
+
+        // Head
         head.direction = head.input_direction;
         match &head.input_direction {
             Direction::Left => {
@@ -169,6 +223,36 @@ fn snake_movement(
     }
 }
 
+fn eat_food(
+    mut commands: Commands,
+    foods: Query<(Entity, &Position), With<Food>>,
+    mut snakes: Query<(&Position, &mut SnakeHead)>,
+    positions: Query<&Position, (Without<SnakeHead>, Without<Food>)>,
+) {
+    let food_positions = get_food_positions(foods);
+
+    for (position, mut head) in snakes.iter_mut() {
+        if let Some(entity) = food_positions.get(position) {
+            commands.entity(*entity).despawn();
+            let mut position = position;
+            if !head.tail.is_empty() {
+                position = positions.get(*head.tail.last().unwrap()).unwrap();
+            }
+            head.tail.push(spawn_tail(&mut commands, position.clone()));
+        }
+    }
+}
+
+#[inline]
+fn get_food_positions(foods: Query<(Entity, &Position), With<Food>>) -> HashMap<Position, Entity> {
+    let mut food_positions = HashMap::new();
+    // Assumes no position has multiple food
+    for (entity, position) in foods.iter() {
+        food_positions.insert(position.clone(), entity);
+    }
+    food_positions
+}
+
 fn main() {
     App::new()
         .insert_resource(WindowDescriptor {
@@ -182,6 +266,7 @@ fn main() {
         .add_startup_system(spawn_snake)
         .add_plugins(DefaultPlugins)
         .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(0.2)).with_system(snake_movement))
+        .add_system(eat_food.after(snake_movement))
         .add_system(snake_movement_input.before(snake_movement))
         .add_system_set_to_stage(
             CoreStage::PostUpdate,
