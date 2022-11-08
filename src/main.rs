@@ -54,13 +54,14 @@ impl Direction {
 }
 
 fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
-    let window = windows.get_primary().unwrap();
-    for (sprite_size, mut transform) in q.iter_mut() {
-        transform.scale = Vec3::new(
-            sprite_size.width / ARENA_WIDTH as f32 * window.width() as f32,
-            sprite_size.height / ARENA_HEIGHT as f32 * window.height() as f32,
-            1.0,
-        );
+    if let Some(window) = windows.get_primary() {
+        for (sprite_size, mut transform) in q.iter_mut() {
+            transform.scale = Vec3::new(
+                sprite_size.width / ARENA_WIDTH as f32 * window.width() as f32,
+                sprite_size.height / ARENA_HEIGHT as f32 * window.height() as f32,
+                1.0,
+            );
+        }
     }
 }
 
@@ -69,25 +70,26 @@ fn position_translation(windows: Res<Windows>, mut q: Query<(&mut Position, &mut
         let tile_size = bound_window / bound_game;
         pos / bound_game * bound_window - (bound_window / 2.) + (tile_size / 2.)
     }
-    let window = windows.get_primary().unwrap();
-    for (mut pos, mut transform) in q.iter_mut() {
-        if pos.x >= ARENA_WIDTH as i32 {
-            pos.x = 0;
-        } else if pos.x < 0 {
-            pos.x = ARENA_WIDTH as i32 - 1;
-        }
+    if let Some(window) = windows.get_primary() {
+        for (mut pos, mut transform) in q.iter_mut() {
+            if pos.x >= ARENA_WIDTH as i32 {
+                pos.x = 0;
+            } else if pos.x < 0 {
+                pos.x = ARENA_WIDTH as i32 - 1;
+            }
 
-        if pos.y >= ARENA_HEIGHT as i32 {
-            pos.y = 0;
-        } else if pos.y < 0 {
-            pos.y = ARENA_HEIGHT as i32 - 1;
+            if pos.y >= ARENA_HEIGHT as i32 {
+                pos.y = 0;
+            } else if pos.y < 0 {
+                pos.y = ARENA_HEIGHT as i32 - 1;
+            }
+
+            transform.translation = Vec3::new(
+                convert(pos.x as f32, window.width() as f32, ARENA_WIDTH as f32),
+                convert(pos.y as f32, window.height() as f32, ARENA_HEIGHT as f32),
+                0.0,
+            );
         }
-        
-        transform.translation = Vec3::new(
-            convert(pos.x as f32, window.width() as f32, ARENA_WIDTH as f32),
-            convert(pos.y as f32, window.height() as f32, ARENA_HEIGHT as f32),
-            0.0,
-        );
     }
 }
 
