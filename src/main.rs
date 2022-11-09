@@ -1,19 +1,37 @@
+use std::ops::Deref;
+use std::time::Duration;
+
 use bevy::prelude::*;
-use bevy::time::FixedTimestep;
 use bevy::utils::HashMap;
+use iyes_loopless::prelude::*;
 use rand::prelude::random;
 
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
 const SNAKE_SEGMENT_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
 const FOOD_COLOR: Color = Color::rgb(1.0, 0.0, 1.0);
-const ARENA_WIDTH: u32 = 10;
-const ARENA_HEIGHT: u32 = 10;
+const ARENA_WIDTH: u32 = 20;
+const ARENA_HEIGHT: u32 = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum GameState {
+    MainMenu,
+    Paused,
+    NewGame,
+    Running
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(SystemLabel)]
+enum SnakeState {
+    Movement,
+}
 
 #[derive(Component)]
 struct SnakeHead {
     input_direction: Direction,
     direction: Direction,
     tail: Vec<Entity>,
+    timer: Timer
 }
 
 #[derive(Component)]
@@ -109,6 +127,9 @@ fn setup_camera(mut commands: Commands) {
 }
 
 fn spawn_snake(mut commands: Commands) {
+    let mut speed_limiter = Timer::from_seconds(0.2, true);
+    // Instant tick the timer so snake starts moving immediately when spawned
+    speed_limiter.tick(Duration::from_secs_f32(0.2));
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
@@ -121,6 +142,7 @@ fn spawn_snake(mut commands: Commands) {
             input_direction: Direction::Right,
             direction: Direction::Right,
             tail: vec![],
+            timer: speed_limiter
         })
         .insert(Position { x: 3, y: 3 })
         .insert(Size::square(0.8));
@@ -179,47 +201,52 @@ fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mu
 }
 
 fn snake_movement(
+    time: Res<Time>,
     mut head_positions: Query<(&mut Position, &mut SnakeHead)>,
     mut positions: Query<&mut Position, Without<SnakeHead>>,
 ) {
     for (mut position, mut head) in head_positions.iter_mut() {
-        // Tail
-        for (i, tail) in head.tail.iter().enumerate().rev() {
-            if i == 0 {
-                let mut pos = positions.get_mut(*tail).unwrap();
-                pos.x = position.x;
-                pos.y = position.y;
-            } else {
-                let next_x;
-                let next_y;
-                // Beat borrow checker
-                {
-                    let next_pos = positions.get(head.tail[i - 1]).unwrap();
-                    next_x = next_pos.x;
-                    next_y = next_pos.y;
+        if head.timer.finished() {
+            // Tail
+            for (i, tail) in head.tail.iter().enumerate().rev() {
+                if i == 0 {
+                    let mut pos = positions.get_mut(*tail).unwrap();
+                    pos.x = position.x;
+                    pos.y = position.y;
+                } else {
+                    let next_x;
+                    let next_y;
+                    // Beat borrow checker
+                    {
+                        let next_pos = positions.get(head.tail[i - 1]).unwrap();
+                        next_x = next_pos.x;
+                        next_y = next_pos.y;
+                    }
+                    let mut pos = positions.get_mut(*tail).unwrap();
+                    pos.x = next_x;
+                    pos.y = next_y;
                 }
-                let mut pos = positions.get_mut(*tail).unwrap();
-                pos.x = next_x;
-                pos.y = next_y;
             }
-        }
 
-        // Head
-        head.direction = head.input_direction;
-        match &head.input_direction {
-            Direction::Left => {
-                position.x -= 1;
-            }
-            Direction::Up => {
-                position.y += 1;
-            }
-            Direction::Right => {
-                position.x += 1;
-            }
-            Direction::Down => {
-                position.y -= 1;
+            // Head
+            head.direction = head.input_direction;
+            match &head.input_direction {
+                Direction::Left => {
+                    position.x -= 1;
+                }
+                Direction::Up => {
+                    position.y += 1;
+                }
+                Direction::Right => {
+                    position.x += 1;
+                }
+                Direction::Down => {
+                    position.y -= 1;
+                }
             }
         }
+        
+        head.timer.tick(time.delta());
     }
 }
 
@@ -257,21 +284,23 @@ fn main() {
     App::new()
         .insert_resource(WindowDescriptor {
             title: "Snake!".to_string(),
-            width: 500.0,
-            height: 500.0,
+            width: 1000.0,
+            height: 1000.0,
             ..default()
         })
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
         .add_startup_system(setup_camera)
         .add_startup_system(spawn_snake)
         .add_plugins(DefaultPlugins)
-        .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(0.2)).with_system(snake_movement))
-        .add_system(eat_food.after(snake_movement))
-        .add_system(snake_movement_input.before(snake_movement))
+        .add_loopless_state(GameState::Running)
+        .add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
+        .add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
+        .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement))
         .add_system_set_to_stage(
             CoreStage::PostUpdate,
-            SystemSet::new().with_system(position_translation).with_system(size_scaling),
+            ConditionSet::new().run_in_state(GameState::Running).with_system(position_translation).with_system(size_scaling).into(),
         )
-        .add_system_set(SystemSet::new().with_run_criteria(FixedTimestep::step(1.0)).with_system(spawn_food))
+        .add_fixed_timestep(Duration::from_secs(1), "spawn_food")
+        .add_fixed_timestep_system("spawn_food", 0, spawn_food.run_in_state(GameState::Running))
         .run();
 }
