@@ -1,5 +1,5 @@
-use std::ops::Deref;
 use std::time::Duration;
+use bevy::app::AppExit;
 
 use bevy::prelude::*;
 use bevy::utils::HashMap;
@@ -124,6 +124,11 @@ fn position_translation(
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn_bundle(Camera2dBundle::default());
+}
+
+fn pre_game(mut commands: Commands) {
+    commands.insert_resource(NextState(GameState::Running));
+    spawn_snake(commands);
 }
 
 fn spawn_snake(mut commands: Commands) {
@@ -280,6 +285,127 @@ fn get_food_positions(foods: Query<(Entity, &Position), With<Food>>) -> HashMap<
     food_positions
 }
 
+// Tag component used to tag entities added on the main menu screen
+#[derive(Component)]
+struct OnMainMenuScreen;
+
+const TEXT_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+const NORMAL_BUTTON: Color = Color::rgb(0.15, 0.15, 0.15);
+const HOVERED_BUTTON: Color = Color::rgb(0.25, 0.25, 0.25);
+const PRESSED_BUTTON: Color = Color::rgb(0.35, 0.75, 0.35);
+
+// All actions that can be triggered from a button click
+#[derive(Component)]
+enum MenuButtonAction {
+    NewGame,
+    BackToMainMenu,
+    Quit,
+}
+
+type UiSize = bevy::ui::Size<Val>;
+
+fn main_menu_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let default_font = asset_server.load("fonts/FiraSans-Bold.ttf");
+    // Common style for all buttons on the screen
+    let button_style = Style {
+        size: UiSize::new(Val::Px(250.0), Val::Px(65.0)),
+        margin: UiRect::all(Val::Px(20.0)),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        ..default()
+    };
+    let button_text_style = TextStyle {
+        font: default_font.clone(),
+        font_size: 40.0,
+        color: TEXT_COLOR,
+    };
+    
+    commands.spawn_bundle(NodeBundle {
+        style: Style {
+            margin: UiRect::all(Val::Auto),
+            flex_direction: FlexDirection::ColumnReverse,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        color: Color::SEA_GREEN.into(),
+        ..default()
+    })
+        .insert(OnMainMenuScreen)
+        .with_children(|parent| {
+            // Display the game name
+            parent.spawn_bundle(
+                TextBundle::from_section(
+                    "Snake Game",
+                    TextStyle {
+                        font: default_font.clone(),
+                        font_size: 80.0,
+                        color: TEXT_COLOR,
+                    },
+                )
+                    .with_style(Style {
+                        margin: UiRect::all(Val::Px(50.0)),
+                        ..default()
+                    }),
+            );
+
+            parent
+                .spawn_bundle(ButtonBundle {
+                    style: button_style.clone(),
+                    color: NORMAL_BUTTON.into(),
+                    ..default()
+                })
+                .insert(MenuButtonAction::NewGame)
+                .with_children(|parent| {
+                    parent.spawn_bundle(TextBundle::from_section(
+                        "New Game",
+                        button_text_style.clone(),
+                    ));
+                });
+        });
+}
+
+// This system handles changing all buttons color based on mouse interaction
+fn button_system(
+    mut interaction_query: Query<(&Interaction, &mut UiColor), (Changed<Interaction>, With<Button>)>,
+) {
+    for (interaction, mut color) in &mut interaction_query {
+        *color = match *interaction {
+            Interaction::Clicked => PRESSED_BUTTON.into(),
+            Interaction::Hovered => HOVERED_BUTTON.into(),
+            Interaction::None => NORMAL_BUTTON.into(),
+        }
+    }
+}
+
+fn menu_action(
+    mut commands: Commands,
+    interaction_query: Query<(&Interaction, &MenuButtonAction), (Changed<Interaction>, With<Button>)>,
+    mut app_exit_events: EventWriter<AppExit>,
+) {
+    for (interaction, menu_button_action) in &interaction_query {
+        if *interaction == Interaction::Clicked {
+            match menu_button_action {
+                MenuButtonAction::NewGame => {
+                    commands.insert_resource(NextState(GameState::PreGame))
+                }
+                MenuButtonAction::BackToMainMenu => {
+                    commands.insert_resource(NextState(GameState::MainMenu))
+                }
+                MenuButtonAction::Quit => {
+                    app_exit_events.send(AppExit)
+                }
+            }
+        }
+    }
+}
+
+// Generic system that takes a component as a parameter, and will despawn all entities with that component
+fn despawn_screen<T: Component>(to_despawn: Query<Entity, With<T>>, mut commands: Commands) {
+    for entity in &to_despawn {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
 fn main() {
     App::new()
         .insert_resource(WindowDescriptor {
@@ -291,10 +417,10 @@ fn main() {
             ..default()
         })
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
-        .add_startup_system(setup_camera)
-        .add_startup_system(spawn_snake.run_in_state(GameState::PreGame))
-        .add_plugins(DefaultPlugins)
         .add_loopless_state(GameState::MainMenu)
+        .add_startup_system(setup_camera)
+        .add_enter_system(GameState::PreGame, pre_game)
+        .add_plugins(DefaultPlugins)
         .add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
         .add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
         .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement))
@@ -304,5 +430,15 @@ fn main() {
         )
         .add_fixed_timestep(Duration::from_secs(1), "spawn_food")
         .add_fixed_timestep_system("spawn_food", 0, spawn_food.run_in_state(GameState::Running))
+        .add_enter_system(GameState::MainMenu, main_menu_setup)
+        // Common systems to all screens that handles buttons behaviour
+        .add_system_set(
+            ConditionSet::new()
+                .run_in_state(GameState::MainMenu)
+                .with_system(menu_action)
+                .with_system(button_system)
+                .into()
+        )
+        .add_exit_system(GameState::MainMenu, despawn_screen::<OnMainMenuScreen>)
         .run();
 }
