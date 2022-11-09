@@ -16,7 +16,7 @@ const ARENA_HEIGHT: u32 = 20;
 enum GameState {
     MainMenu,
     Paused,
-    NewGame,
+    PreGame,
     Running
 }
 
@@ -286,13 +286,15 @@ fn main() {
             title: "Snake!".to_string(),
             width: 1000.0,
             height: 1000.0,
+            // TODO: always opens on primary monitor
+            position: WindowPosition::Centered(MonitorSelection::Primary),
             ..default()
         })
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
         .add_startup_system(setup_camera)
-        .add_startup_system(spawn_snake)
+        .add_startup_system(spawn_snake.run_in_state(GameState::PreGame))
         .add_plugins(DefaultPlugins)
-        .add_loopless_state(GameState::Running)
+        .add_loopless_state(GameState::MainMenu)
         .add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
         .add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
         .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement))
