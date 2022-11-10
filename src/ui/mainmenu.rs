@@ -1,8 +1,8 @@
+use crate::state::GameState;
+use crate::ui::components::{MenuButtonAction, OnMainMenuScreen};
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use iyes_loopless::prelude::*;
-use crate::state::GameState;
-use crate::ui::components::{MenuButtonAction, OnMainMenuScreen};
 
 const TEXT_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
 const NORMAL_BUTTON: Color = Color::rgb(0.15, 0.15, 0.15);
@@ -25,16 +25,17 @@ pub fn main_menu_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         color: TEXT_COLOR,
     };
 
-    commands.spawn_bundle(NodeBundle {
-        style: Style {
-            margin: UiRect::all(Val::Auto),
-            flex_direction: FlexDirection::ColumnReverse,
-            align_items: AlignItems::Center,
+    commands
+        .spawn_bundle(NodeBundle {
+            style: Style {
+                margin: UiRect::all(Val::Auto),
+                flex_direction: FlexDirection::ColumnReverse,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            color: Color::SEA_GREEN.into(),
             ..default()
-        },
-        color: Color::SEA_GREEN.into(),
-        ..default()
-    })
+        })
         .insert(OnMainMenuScreen)
         .with_children(|parent| {
             // Display the game name
@@ -47,10 +48,10 @@ pub fn main_menu_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                         color: TEXT_COLOR,
                     },
                 )
-                    .with_style(Style {
-                        margin: UiRect::all(Val::Px(50.0)),
-                        ..default()
-                    }),
+                .with_style(Style {
+                    margin: UiRect::all(Val::Px(50.0)),
+                    ..default()
+                }),
             );
 
             parent
@@ -61,18 +62,13 @@ pub fn main_menu_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 })
                 .insert(MenuButtonAction::NewGame)
                 .with_children(|parent| {
-                    parent.spawn_bundle(TextBundle::from_section(
-                        "New Game",
-                        button_text_style.clone(),
-                    ));
+                    parent.spawn_bundle(TextBundle::from_section("New Game", button_text_style.clone()));
                 });
         });
 }
 
 // This system handles changing all buttons color based on mouse interaction
-pub fn button_system(
-    mut interaction_query: Query<(&Interaction, &mut UiColor), (Changed<Interaction>, With<Button>)>,
-) {
+pub fn button_system(mut interaction_query: Query<(&Interaction, &mut UiColor), (Changed<Interaction>, With<Button>)>) {
     for (interaction, mut color) in &mut interaction_query {
         *color = match *interaction {
             Interaction::Clicked => PRESSED_BUTTON.into(),
@@ -90,15 +86,9 @@ pub fn menu_action(
     for (interaction, menu_button_action) in &interaction_query {
         if *interaction == Interaction::Clicked {
             match menu_button_action {
-                MenuButtonAction::NewGame => {
-                    commands.insert_resource(NextState(GameState::PreGame))
-                }
-                MenuButtonAction::BackToMainMenu => {
-                    commands.insert_resource(NextState(GameState::MainMenu))
-                }
-                MenuButtonAction::Quit => {
-                    app_exit_events.send(AppExit)
-                }
+                MenuButtonAction::NewGame => commands.insert_resource(NextState(GameState::PreGame)),
+                MenuButtonAction::BackToMainMenu => commands.insert_resource(NextState(GameState::MainMenu)),
+                MenuButtonAction::Quit => app_exit_events.send(AppExit),
             }
         }
     }

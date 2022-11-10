@@ -15,15 +15,15 @@ pub mod constants;
 pub struct CommonPlugin;
 
 impl Plugin for CommonPlugin {
-
     fn build(&self, app: &mut App) {
-        app
-            .add_startup_system(setup_camera)
-            .add_enter_system(GameState::PreGame, pre_game)
-            .add_system_set_to_stage(
-                CoreStage::PostUpdate,
-                ConditionSet::new().run_in_state(GameState::Running).with_system(position_translation).with_system(size_scaling).into(),
-            );
+        app.add_startup_system(setup_camera).add_enter_system(GameState::PreGame, pre_game).add_system_set_to_stage(
+            CoreStage::PostUpdate,
+            ConditionSet::new()
+                .run_in_state(GameState::Running)
+                .with_system(position_translation)
+                .with_system(size_scaling)
+                .into(),
+        );
     }
 }
 

@@ -18,10 +18,8 @@ pub mod components;
 pub struct FoodPlugin;
 
 impl Plugin for FoodPlugin {
-    
     fn build(&self, app: &mut App) {
-        app
-            .add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
+        app.add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
             .add_fixed_timestep(Duration::from_secs(1), "spawn_food")
             .add_fixed_timestep_system("spawn_food", 0, spawn_food.run_in_state(GameState::Running));
     }

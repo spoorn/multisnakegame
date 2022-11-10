@@ -12,10 +12,8 @@ pub mod components;
 pub struct SnakePlugin;
 
 impl Plugin for SnakePlugin {
-
     fn build(&self, app: &mut App) {
-        app
-            .add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
+        app.add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
             .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
     }
 }
@@ -39,7 +37,7 @@ pub fn spawn_snake(mut commands: Commands) {
             input_direction: Direction::Right,
             direction: Direction::Right,
             tail: vec![],
-            timer: speed_limiter
+            timer: speed_limiter,
         })
         .insert(Position { x: 3, y: 3 })
         .insert(Size::square(0.8));

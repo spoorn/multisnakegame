@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
-mod ui;
-mod food;
 mod common;
+mod food;
 mod snake;
 mod state;
+mod ui;
 
 fn main() {
     App::new()
