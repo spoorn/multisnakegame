@@ -18,7 +18,7 @@ impl Size {
     }
 }
 
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Direction {
     Left,
     Up,

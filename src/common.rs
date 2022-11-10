@@ -61,7 +61,7 @@ fn position_translation(
                 pos.y = ARENA_HEIGHT as i32 - 1;
             }
 
-            let z = if let Some(_) = head { 1.0 } else { 0.0 };
+            let z = if head.is_some() { 1.0 } else { 0.0 };
 
             transform.translation = Vec3::new(
                 convert(pos.x as f32, window.width() as f32, ARENA_WIDTH as f32),

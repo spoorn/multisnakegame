@@ -59,7 +59,7 @@ fn eat_food(
             if !head.tail.is_empty() {
                 position = positions.get(*head.tail.last().unwrap()).unwrap();
             }
-            head.tail.push(spawn_tail(&mut commands, position.clone()));
+            head.tail.push(spawn_tail(&mut commands, *position));
         }
     }
 }
@@ -69,7 +69,7 @@ fn get_food_positions(foods: Query<(Entity, &Position), With<Food>>) -> HashMap<
     let mut food_positions = HashMap::new();
     // Assumes no position has multiple food
     for (entity, position) in foods.iter() {
-        food_positions.insert(position.clone(), entity);
+        food_positions.insert(*position, entity);
     }
     food_positions
 }
