@@ -11,6 +11,7 @@ use crate::state::GameState;
 
 pub mod components;
 pub mod constants;
+pub mod quinn_helpers;
 
 pub struct CommonPlugin;
 

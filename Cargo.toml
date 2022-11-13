@@ -8,7 +8,11 @@ edition = "2021"
 [dependencies]
 bevy = { version = "0.8.1" }
 iyes_loopless = "0.8.0"
+quinn = "0.9.0"
 rand = "0.8.5"
+rcgen = "0.10.0"
+rustls = { version = "0.20.7", default-features = false, features = ["quic", "dangerous_configuration"] }
+tokio = { version = "1.21.2", features = ["full"] }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
