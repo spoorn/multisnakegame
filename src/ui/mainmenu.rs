@@ -64,6 +64,17 @@ pub fn main_menu_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                 .with_children(|parent| {
                     parent.spawn_bundle(TextBundle::from_section("New Game", button_text_style.clone()));
                 });
+
+            parent
+                .spawn_bundle(ButtonBundle {
+                    style: button_style.clone(),
+                    color: NORMAL_BUTTON.into(),
+                    ..default()
+                })
+                .insert(MenuButtonAction::Quit)
+                .with_children(|parent| {
+                    parent.spawn_bundle(TextBundle::from_section("Quit", button_text_style.clone()));
+                });
         });
 }
 
