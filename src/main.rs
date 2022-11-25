@@ -9,16 +9,12 @@ mod ui;
 // Test
 mod client;
 mod server;
+mod networking;
 
 
 #[tokio::main]
 async fn main() {
-    let server = tokio::spawn(async {
-        server::server::run().await.unwrap();
-    });
-    let client = tokio::spawn(async {
-        client::client::run().await.unwrap();
-    });
+
 
     //client::client::run();
     App::new()
