@@ -9,10 +9,15 @@ use bimap::BiMap;
 use bytes::Bytes;
 use crossbeam_queue::SegQueue;
 use hashbrown::HashMap;
-use quinn::RecvStream;
+use quinn::{RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::sleep;
 use crate::networking::quinn_helpers::{make_client_endpoint, make_server_endpoint};
+
+const FRAME_BOUNDARY: &[u8] = b"AAAAAA031320050421";
 
 pub trait Packet {
     fn to_bytes(self) -> Bytes;
@@ -103,9 +108,11 @@ pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     receive: HashMap<TypeId, SegQueue<Bytes>>,
-    send: HashMap<TypeId, SegQueue<Box<dyn Packet + Send>>>,
+    //send: HashMap<TypeId, SegQueue<Box<dyn Packet + Send>>>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send>>,
     recv_streams: HashMap<u32, RecvStream>,
+    send_streams: HashMap<u32, SendStream>,
+    rx: HashMap<TypeId, Receiver<Bytes>>,
     next_receive_id: u32,
     next_send_id: u32
 }
@@ -117,9 +124,10 @@ impl PacketManager {
             receive_packets: BiMap::new(),
             send_packets: BiMap::new(),
             receive: HashMap::new(),
-            send: HashMap::new(),
             recv_packet_builders: HashMap::new(),
             recv_streams: HashMap::new(),
+            send_streams: HashMap::new(),
+            rx: HashMap::new(),
             next_receive_id: 0,
             next_send_id: 0
         }
@@ -143,18 +151,44 @@ impl PacketManager {
             // Note: Packets are not sent immediately upon the write.  The thread needs to be kept
             // open so that the packets can actually be sent over the wire to the client.
             for i in 0..expected_num_accepts_uni {
-                let mut send = conn
+                let mut send_stream = conn
                     .open_uni()
                     .await?;
                 println!("opened");
-                send.write_u32(i).await?;
+                send_stream.write_u32(i).await?;
                 println!("write");
+                self.send_streams.insert(i, send_stream);
+                
+                // let (tx, mut rx) = mpsc::channel(100);
+                // // TODO: Add tx to senders
+                // self.send.insert(i, tx);
+                // let send_thread = tokio::spawn(async move {
+                //     loop {
+                //         println!("### SEND THREAD");
+                //         match rx.try_recv() {
+                //             Ok(bytes) => {
+                //                 println!("Writing bytes");
+                //                 send_stream.write_chunk(bytes).await.unwrap();
+                //             }
+                //             Err(e) => {
+                //                 match e {
+                //                     TryRecvError::Empty => {
+                //                         sleep(Duration::from_millis(1000)).await;
+                //                     }
+                //                     TryRecvError::Disconnected => {
+                //                         return Box::new(SendError::new(format!("Packet sender disconnected for packet {}", i)));
+                //                     }
+                //                 }
+                //             }
+                //         }
+                //     } 
+                // });
             }
             
-            loop {
-                // Loop to keep server alive
-                sleep(Duration::from_millis(10000)).await;
-            }
+            // loop {
+            //     // Loop to keep server alive
+            //     sleep(Duration::from_millis(10000)).await;
+            // }
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
             let mut endpoint = make_client_endpoint(client_addr, &[])?;
@@ -163,7 +197,7 @@ impl PacketManager {
             let connection = endpoint.connect(server_addr, "localhost")?.await?;
             println!("[client] connected: addr={}", connection.remote_address());
 
-            for _ in 0..expected_num_accepts_uni {
+            for i in 0..expected_num_accepts_uni {
                 println!("### waiting");
                 let mut recv = connection.accept_uni().await?;
                 println!("### connection");
@@ -173,7 +207,7 @@ impl PacketManager {
                 //     return Err(Box::new(ConnectionError::new(format!("Received unexpected packet ID {} from server", id))));
                 // }
 
-                self.recv_streams.insert(id, recv);
+                self.recv_streams.insert(i, recv);
 
                 //self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
                 // assert return of above is None
@@ -199,28 +233,6 @@ impl PacketManager {
                 // });
             }
 
-            // while let Ok(mut recv) = connection.accept_uni().await {
-            //     loop {
-            //         let chunk = recv.read_chunk(usize::MAX, true).await?;
-            // 
-            //         match chunk {
-            //             None => { break; }
-            //             Some(chunk) => {
-            //                 //let splits: Vec<_> = chunk.bytes.split(|&e| e == b"AAAAA").filter(|v| !v.is_empty()).collect();
-            //                 //for split in splits {
-            //                 //     let str = std::str::from_utf8(&chunk.bytes).unwrap();
-            //                 //     println!("{:?}", str);
-            //                 // }
-            //             }
-            //         }
-            //     }
-            // 
-            //     // Because it is a unidirectional stream, we can only receive not send back.
-            //     // let bytes = recv.read_to_end(usize::MAX).await?;
-            //     // let str = std::str::from_utf8(&bytes).unwrap();
-            //     // println!("{:?}", str);
-            // }
-
             println!("[client] Created connection!");
 
             // Give the server has a chance to clean up
@@ -237,20 +249,70 @@ impl PacketManager {
         self.recv_packet_builders.insert(packet_type_id, Box::new(packet_builder));
         self.receive.insert(packet_type_id, SegQueue::new());  // TODO: validate return is None
 
-        let arc_packet_builder = Arc::new(packet_builder);
         println!("{:#?}", self.next_receive_id);
+        
         let mut recv_stream = self.recv_streams.remove(&self.next_receive_id).unwrap();
+        let (tx, rx) = mpsc::channel(100);
+        
+        // TODO: Add receive_thread to rx for validations
+        self.rx.insert(packet_type_id, rx);
         let receive_thread = tokio::spawn(async move {
+            let mut partial_chunk: Option<Bytes> = None;
             loop {
+                println!("### RECEIVE THREAD");
                 // TODO: relay error message
                 // TODO: configurable size limit
                 let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
+                println!("### GOT DATA");
                 match chunk {
-                    None => { break; }
+                    None => { 
+                        // TODO: Error
+                        break;
+                    }
                     Some(chunk) => {
-                        let bytes = chunk.bytes;
-                        let packet = arc_packet_builder.read(bytes).unwrap();
-                        println!("{}", packet.to_string());
+                        let bytes;
+                        match partial_chunk.take() {
+                            None => {
+                                bytes = chunk.bytes;
+                            }
+                            Some(part) => {
+                                bytes = Bytes::from([part, chunk.bytes].concat());
+                            }
+                        }
+                        let boundaries: Vec<usize> = bytes.windows(FRAME_BOUNDARY.len()).enumerate().filter(|(_, w)| matches!(*w, FRAME_BOUNDARY)).map(|(i, _)| i).collect();
+                        let mut offset = 0;
+                        for i in boundaries.iter() {
+                            // Reached end of bytes
+                            if offset >= bytes.len() {
+                                break;
+                            }
+                            let frame = bytes.slice(offset..*i);
+                            match partial_chunk.take() {
+                                None => {
+                                    println!("tx whole bytes");
+                                    tx.send(frame).await.unwrap();
+                                },
+                                Some(part) => {
+                                    println!("tx partial bytes");
+                                    let reconstructed_frame = Bytes::from([part, frame].concat());
+                                    tx.send(reconstructed_frame).await.unwrap();
+                                }
+                            }
+                            offset = i + FRAME_BOUNDARY.len();
+                        }
+                        
+                        if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
+                            println!("Dangling prefix part at end of stream");
+                            let prefix_part = bytes.slice(offset..bytes.len());
+                            match partial_chunk.take() {
+                                None => {
+                                    partial_chunk = Some(prefix_part);
+                                }
+                                Some(part) => {
+                                    partial_chunk = Some(Bytes::from([part, prefix_part].concat()))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -267,10 +329,48 @@ impl PacketManager {
         Ok(())
     }
     
-    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self) -> Result<Option<Vec<T>>, ReceiveError> {
+    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
         self.validate_packet_was_registered::<T>(false)?;
-        let queue = self.receive.get(&TypeId::of::<T>());
-        match queue {
+        let packet_type_id = TypeId::of::<T>();
+        let queue = self.receive.get(&packet_type_id);
+        if queue.is_none() {
+            let queue: SegQueue<Bytes> = SegQueue::new();
+            self.receive.insert(TypeId::of::<T>(), queue);
+        }
+        let queue = self.receive.get(&packet_type_id).unwrap();
+        // TODO: simplify
+        let rx = self.rx.get_mut(&packet_type_id).unwrap();
+        loop {
+            let receiver = self.recv_packet_builders.remove(&TypeId::of::<T>()).unwrap();
+            println!("try receive");
+            match rx.try_recv() {
+                Ok(bytes) => {
+                    println!("Received bytes");
+                    queue.push(bytes);
+                    self.recv_packet_builders.insert(packet_type_id, receiver);
+                }
+                Err(e) => {
+                    self.recv_packet_builders.insert(packet_type_id, receiver);
+                    match e {
+                        TryRecvError::Empty => {
+                            // TODO: allow blocking
+                            if blocking && queue.is_empty() {
+                                println!("sleeping");
+                                std::thread::sleep(Duration::from_millis(1000));
+                                println!("woke up");
+                            } else {
+                                break;
+                            }
+                        }
+                        TryRecvError::Disconnected => {
+                            return Err(ReceiveError::new(format!("Receiver channel for type {} was disconnected", type_name::<T>())));
+                        }
+                    }
+                }
+            }
+        }
+        
+        match self.receive.get(&packet_type_id) {
             None => { return Err(ReceiveError::new(format!("Receive queue did not contain type {}", type_name::<T>()))); }
             Some(packets) => {
                 let size = packets.len();
@@ -305,8 +405,14 @@ impl PacketManager {
         }
     }
     
-    pub fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+    pub async fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
         let bytes = packet.to_bytes();
+        let packet_type_id = TypeId::of::<T>();
+        let id = self.send_packets.get_by_right(&packet_type_id).unwrap();
+        let send_stream = self.send_streams.get_mut(id).unwrap();
+        send_stream.write_chunk(bytes).await.unwrap();
+        send_stream.write_all(FRAME_BOUNDARY).await.unwrap();
+        println!("Sent packet");
         Ok(())
     }
     
@@ -328,7 +434,7 @@ impl PacketManager {
     }
     
     fn validate_packet_is_new<T: Packet + 'static>(&self, is_send: bool) -> Result<(), ReceiveError> {
-        if (is_send && self.send_packets.contains_right(&TypeId::of::<T>())) || self.receive_packets.contains_right(&TypeId::of::<T>()) {
+        if (is_send && self.send_packets.contains_right(&TypeId::of::<T>())) || !is_send && self.receive_packets.contains_right(&TypeId::of::<T>()) {
             return Err(ReceiveError { message: format!("Type '{}' was already registered!", type_name::<T>()) })
         } 
         Ok(())
@@ -353,7 +459,10 @@ impl PacketManager {
 mod tests {
     use std::any::Any;
     use std::error::Error;
+    use std::time::Duration;
     use bytes::Bytes;
+    use tokio::io::AsyncWriteExt;
+    use tokio::time::sleep;
 
     use crate::networking::packet::{Packet, PacketBuilder, PacketManager};
 
@@ -422,6 +531,16 @@ mod tests {
         let server = tokio::spawn(async {
             let mut m = PacketManager::new();
             m.init_connection(true, 2).await;
+            println!("Done init server");
+            assert!(m.register_send_packet::<Test>().is_ok());
+            assert!(m.register_send_packet::<Other>().is_ok());
+            assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
+            assert!(m.send::<Test>(Test { id: 8 }).await.is_ok());
+            assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
+            assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
+            loop {
+                sleep(Duration::from_millis(10000)).await;
+            }
         });
         let client = manager.init_connection(false, 2).await;
         println!("{:#?}", client);
@@ -429,16 +548,14 @@ mod tests {
         assert!(client.is_ok());
         assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
         assert!(manager.register_receive_packet::<Other>(OtherBuilder).is_ok());
-        manager.receive_packet::<Test>(Test { id: 5 });
-        manager.receive_packet::<Test>(Test { id: 8 });
-        manager.receive_packet::<Other>(Other { name: "spoorn".to_string(), id: 4 });
-        manager.receive_packet::<Other>(Other { name: "kiko".to_string(), id: 6 });
-        let test_res = manager.received::<Test, TestBuilder>();
+        
+        sleep(Duration::from_millis(1000)).await;
+        let test_res = manager.received::<Test, TestBuilder>(true);
         assert!(test_res.is_ok());
         let unwrapped = test_res.unwrap();
         assert!(unwrapped.is_some());
         assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
-        let other_res = manager.received::<Other, OtherBuilder>();
+        let other_res = manager.received::<Other, OtherBuilder>(true);
         assert!(other_res.is_ok());
         let unwrapped = other_res.unwrap();
         assert!(unwrapped.is_some());
