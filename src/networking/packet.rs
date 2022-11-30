@@ -329,7 +329,7 @@ impl PacketManager {
         Ok(())
     }
     
-    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+    pub async fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
         self.validate_packet_was_registered::<T>(false)?;
         let packet_type_id = TypeId::of::<T>();
         let queue = self.receive.get(&packet_type_id);
@@ -356,7 +356,9 @@ impl PacketManager {
                             // TODO: allow blocking
                             if blocking && queue.is_empty() {
                                 println!("sleeping");
-                                std::thread::sleep(Duration::from_millis(1000));
+                                // Have to use tokio's sleep so it can yield to the tokio executor
+                                // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
+                                sleep(Duration::from_millis(1000)).await;
                                 println!("woke up");
                             } else {
                                 break;
@@ -549,13 +551,12 @@ mod tests {
         assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
         assert!(manager.register_receive_packet::<Other>(OtherBuilder).is_ok());
         
-        sleep(Duration::from_millis(1000)).await;
-        let test_res = manager.received::<Test, TestBuilder>(true);
+        let test_res = manager.received::<Test, TestBuilder>(true).await;
         assert!(test_res.is_ok());
         let unwrapped = test_res.unwrap();
         assert!(unwrapped.is_some());
         assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
-        let other_res = manager.received::<Other, OtherBuilder>(true);
+        let other_res = manager.received::<Other, OtherBuilder>(true).await;
         assert!(other_res.is_ok());
         let unwrapped = other_res.unwrap();
         assert!(unwrapped.is_some());
