@@ -1,14 +1,18 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
+use std::time::Duration;
 use bevy::utils::label::DynEq;
 
 use bimap::BiMap;
 use bytes::Bytes;
 use crossbeam_queue::SegQueue;
 use hashbrown::HashMap;
-use tokio::io::AsyncReadExt;
-use crate::networking::quinn_helpers::make_client_endpoint;
+use quinn::RecvStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::sleep;
+use crate::networking::quinn_helpers::{make_client_endpoint, make_server_endpoint};
 
 pub trait Packet {
     fn to_bytes(self) -> Bytes;
@@ -99,8 +103,9 @@ pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     receive: HashMap<TypeId, SegQueue<Bytes>>,
-    send: HashMap<TypeId, SegQueue<Box<dyn Packet>>>,
-    receivers: HashMap<TypeId, Box<dyn Any>>,
+    send: HashMap<TypeId, SegQueue<Box<dyn Packet + Send>>>,
+    recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send>>,
+    recv_streams: HashMap<u32, RecvStream>,
     next_receive_id: u32,
     next_send_id: u32
 }
@@ -113,93 +118,144 @@ impl PacketManager {
             send_packets: BiMap::new(),
             receive: HashMap::new(),
             send: HashMap::new(),
-            receivers: HashMap::new(),
+            recv_packet_builders: HashMap::new(),
+            recv_streams: HashMap::new(),
             next_receive_id: 0,
             next_send_id: 0
         }
     }
 
-    #[tokio::main]
     pub async fn init_connection(&mut self, is_server: bool, expected_num_accepts_uni: u32) -> Result<(), Box<dyn Error>> {
         // if expected_num_accepts_uni != self.next_receive_id {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
         // }
         let server_addr = "127.0.0.1:5000".parse().unwrap();
         let client_addr = "127.0.0.1:5001".parse().unwrap();
-        // Bind this endpoint to a UDP socket on the given client address.
-        let mut endpoint = make_client_endpoint(client_addr, &[])?;
         
-        // Connect to the server passing in the server name which is supposed to be in the server certificate.
-        let connection = endpoint.connect(server_addr, "localhost")?.await?;
-        println!("[client] connected: addr={}", connection.remote_address());
-        
-        self.receive.get(self.receive_packets.get_by_left(&0).unwrap()).unwrap().push(Bytes::new());
+        if is_server {
+            let (endpoint, server_cert) = make_server_endpoint(server_addr)?;
 
+            // Single connection
+            let incoming_conn = endpoint.accept().await.unwrap();
+            let conn = incoming_conn.await.unwrap();
+            println!("[server] connection accepted: addr={}", conn.remote_address());
 
-        // Waiting for a stream will complete with an error when the server closes the connection
-        //let _ = connection.accept_uni().await;
-        
-        for _ in 0..expected_num_accepts_uni {
-            let mut recv = connection.accept_uni().await?;
-            let id = recv.read_u32().await?;
-            // if id >= self.next_receive_id {
-            //     return Err(Box::new(ConnectionError::new(format!("Received unexpected packet ID {} from server", id))));
-            // }
+            // Note: Packets are not sent immediately upon the write.  The thread needs to be kept
+            // open so that the packets can actually be sent over the wire to the client.
+            for i in 0..expected_num_accepts_uni {
+                let mut send = conn
+                    .open_uni()
+                    .await?;
+                println!("opened");
+                send.write_u32(i).await?;
+                println!("write");
+            }
             
-            self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
-            
-            // TODO: Assert receivers exists
-            
-            // let receive_thread = tokio::spawn(async {
-            //     
+            loop {
+                // Loop to keep server alive
+                sleep(Duration::from_millis(10000)).await;
+            }
+        } else {
+            // Bind this endpoint to a UDP socket on the given client address.
+            let mut endpoint = make_client_endpoint(client_addr, &[])?;
+
+            // Connect to the server passing in the server name which is supposed to be in the server certificate.
+            let connection = endpoint.connect(server_addr, "localhost")?.await?;
+            println!("[client] connected: addr={}", connection.remote_address());
+
+            for _ in 0..expected_num_accepts_uni {
+                println!("### waiting");
+                let mut recv = connection.accept_uni().await?;
+                println!("### connection");
+                let id = recv.read_u32().await?;
+                println!("read {}", id);
+                // if id >= self.next_receive_id {
+                //     return Err(Box::new(ConnectionError::new(format!("Received unexpected packet ID {} from server", id))));
+                // }
+
+                self.recv_streams.insert(id, recv);
+
+                //self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
+                // assert return of above is None
+                // TODO: Assert receivers exists
+
+                // let receive_thread = tokio::spawn(async move {
+                //     
+                //     loop {
+                //         // TODO: relay error message
+                //         // TODO: configurable size limit
+                //         let chunk = recv.read_chunk(usize::MAX, true).await.unwrap();
+                //         match chunk {
+                //             None => { break; }
+                //             Some(chunk) => {
+                //                 let bytes = chunk.bytes;
+                //                 let packet_type = self.receive_packets.get_by_left(&0).unwrap().into();
+                //                 let packet_builder = self.recv_packet_builders.get(self.receive_packets.get_by_left(&0).unwrap()).unwrap();
+                //                 let packet = packet_builder.downcast_ref::<dyn PacketBuilder>();
+                //                 //println!("{}", packet.to_string());
+                //             }
+                //         }
+                //     }
+                // });
+            }
+
+            // while let Ok(mut recv) = connection.accept_uni().await {
             //     loop {
-            //         // TODO: relay error message
-            //         let chunk = recv.read_chunk(usize::MAX, true).await.unwrap();
+            //         let chunk = recv.read_chunk(usize::MAX, true).await?;
+            // 
             //         match chunk {
             //             None => { break; }
             //             Some(chunk) => {
-            //                 let bytes = chunk.bytes;
-            //                 //let packet = packet_builder.
-            //                 //println!("{}", packet.to_string());
+            //                 //let splits: Vec<_> = chunk.bytes.split(|&e| e == b"AAAAA").filter(|v| !v.is_empty()).collect();
+            //                 //for split in splits {
+            //                 //     let str = std::str::from_utf8(&chunk.bytes).unwrap();
+            //                 //     println!("{:?}", str);
+            //                 // }
             //             }
             //         }
             //     }
-            // });
+            // 
+            //     // Because it is a unidirectional stream, we can only receive not send back.
+            //     // let bytes = recv.read_to_end(usize::MAX).await?;
+            //     // let str = std::str::from_utf8(&bytes).unwrap();
+            //     // println!("{:?}", str);
+            // }
+
+            println!("[client] Created connection!");
+
+            // Give the server has a chance to clean up
+            //endpoint.wait_idle().await;
         }
-
-        // while let Ok(mut recv) = connection.accept_uni().await {
-        //     loop {
-        //         let chunk = recv.read_chunk(usize::MAX, true).await?;
-        // 
-        //         match chunk {
-        //             None => { break; }
-        //             Some(chunk) => {
-        //                 //let splits: Vec<_> = chunk.bytes.split(|&e| e == b"AAAAA").filter(|v| !v.is_empty()).collect();
-        //                 //for split in splits {
-        //                 //     let str = std::str::from_utf8(&chunk.bytes).unwrap();
-        //                 //     println!("{:?}", str);
-        //                 // }
-        //             }
-        //         }
-        //     }
-        // 
-        //     // Because it is a unidirectional stream, we can only receive not send back.
-        //     // let bytes = recv.read_to_end(usize::MAX).await?;
-        //     // let str = std::str::from_utf8(&bytes).unwrap();
-        //     // println!("{:?}", str);
-        // }
-
-        println!("[client] Created connection!");
-
-        // Give the server has a chance to clean up
-        //endpoint.wait_idle().await;
-
+        
         Ok(())
     }
     
-    pub fn register_receive_packet<T: Packet + 'static>(&mut self) -> Result<(), ReceiveError> {
+    pub fn register_receive_packet<T: Packet + 'static>(&mut self, packet_builder: impl PacketBuilder<T> + 'static + Sync + Send + Copy) -> Result<(), ReceiveError> {
         self.validate_packet_is_new::<T>(false)?;
-        self.receive_packets.insert(self.next_receive_id, TypeId::of::<T>());
+        let packet_type_id = TypeId::of::<T>();
+        self.receive_packets.insert(self.next_receive_id, packet_type_id);
+        self.recv_packet_builders.insert(packet_type_id, Box::new(packet_builder));
+        self.receive.insert(packet_type_id, SegQueue::new());  // TODO: validate return is None
+
+        let arc_packet_builder = Arc::new(packet_builder);
+        println!("{:#?}", self.next_receive_id);
+        let mut recv_stream = self.recv_streams.remove(&self.next_receive_id).unwrap();
+        let receive_thread = tokio::spawn(async move {
+            loop {
+                // TODO: relay error message
+                // TODO: configurable size limit
+                let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
+                match chunk {
+                    None => { break; }
+                    Some(chunk) => {
+                        let bytes = chunk.bytes;
+                        let packet = arc_packet_builder.read(bytes).unwrap();
+                        println!("{}", packet.to_string());
+                    }
+                }
+            }
+        });
+
         self.next_receive_id += 1;
         Ok(())
     }
@@ -208,13 +264,6 @@ impl PacketManager {
         self.validate_packet_is_new::<T>(true)?;
         self.send_packets.insert(self.next_send_id, TypeId::of::<T>());
         self.next_send_id += 1;
-        Ok(())
-    }
-    
-    pub fn register_receiver<T: Packet + 'static>(&mut self, packet_builder: impl PacketBuilder<T> + 'static) -> Result<(), ReceiveError> {
-        self.validate_packet_was_registered::<T>(false)?;
-        let receive_id = self.receive_packets.get_by_right(&TypeId::of::<T>()).unwrap();
-        self.receivers.insert(TypeId::of::<T>(), Box::new(packet_builder));
         Ok(())
     }
     
@@ -230,7 +279,7 @@ impl PacketManager {
                 }
                 
                 let mut res: Vec<T> = Vec::new();
-                let receiver = self.receivers.remove(&TypeId::of::<T>()).unwrap();
+                let receiver = self.recv_packet_builders.remove(&TypeId::of::<T>()).unwrap();
                 for _ in 0..size {
                     let e = packets.pop();
                     match e {
@@ -250,7 +299,7 @@ impl PacketManager {
                     }
                 }
                 
-                self.receivers.insert(TypeId::of::<T>(), receiver);
+                self.recv_packet_builders.insert(TypeId::of::<T>(), receiver);
                 Ok(Some(res))
             }
         }
@@ -333,6 +382,7 @@ mod tests {
         }
     }
     
+    #[derive(Copy, Clone)]
     struct TestBuilder;
     impl PacketBuilder<Test> for TestBuilder {
     
@@ -357,6 +407,7 @@ mod tests {
         }
     }
 
+    #[derive(Copy, Clone)]
     struct OtherBuilder;
     impl PacketBuilder<Other> for OtherBuilder {
 
@@ -365,13 +416,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn receive_packet_e2e() {
+    #[tokio::test]
+    async fn receive_packet_e2e() {
         let mut manager = PacketManager::new();
-        assert!(manager.register_receive_packet::<Test>().is_ok());
-        assert!(manager.register_receive_packet::<Other>().is_ok());
-        assert!(manager.register_receiver::<Test>(TestBuilder).is_ok());
-        assert!(manager.register_receiver::<Other>(OtherBuilder).is_ok());
+        let server = tokio::spawn(async {
+            let mut m = PacketManager::new();
+            m.init_connection(true, 2).await;
+        });
+        let client = manager.init_connection(false, 2).await;
+        println!("{:#?}", client);
+        
+        assert!(client.is_ok());
+        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
+        assert!(manager.register_receive_packet::<Other>(OtherBuilder).is_ok());
         manager.receive_packet::<Test>(Test { id: 5 });
         manager.receive_packet::<Test>(Test { id: 8 });
         manager.receive_packet::<Other>(Other { name: "spoorn".to_string(), id: 4 });
@@ -392,9 +449,9 @@ mod tests {
     fn test_register_receive_packet() {
         let mut manager = PacketManager::new();
         assert!(manager.validate_packet_is_new::<Test>(false).is_ok());
-        assert!(manager.register_receive_packet::<Test>().is_ok());
+        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
         assert!(manager.validate_packet_is_new::<Test>(false).is_err());
-        assert!(manager.register_receive_packet::<Test>().is_err());
+        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_err());
     }
 
     #[test]

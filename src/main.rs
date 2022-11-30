@@ -14,9 +14,6 @@ mod networking;
 
 #[tokio::main]
 async fn main() {
-
-
-    //client::client::run();
     App::new()
         .insert_resource(WindowDescriptor {
             title: "Snake!".to_string(),
