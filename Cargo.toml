@@ -5,11 +5,18 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+
+members = [
+    "networking",
+]
+
 [dependencies]
 bevy = { version = "0.8.1" }
 bimap = "0.6.2"
 bytes = "1.2.1"
 crossbeam-queue = "0.3.7"
+derive_more = "0.99.17"
 hashbrown = "0.13.1"
 iyes_loopless = "0.8.0"
 # Read more on QUIC at https://http3-explained.haxx.se/
@@ -20,6 +27,7 @@ rustls = { version = "0.20.7", default-features = false, features = ["quic", "da
 thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["full"] }
 tokio-test = "0.4.2"
+networking = { path = "networking" }
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

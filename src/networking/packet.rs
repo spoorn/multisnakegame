@@ -1,20 +1,23 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
+use std::fmt::{Debug, Display};
 use std::time::Duration;
-use bevy::utils::label::DynEq;
 
+use bevy::utils::label::DynEq;
 use bimap::BiMap;
 use bytes::Bytes;
 use crossbeam_queue::SegQueue;
+use derive_more::Display;
 use hashbrown::HashMap;
 use quinn::{RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::sleep;
+
+use networking::ErrorMessageNew;
+
 use crate::networking::quinn_helpers::{make_client_endpoint, make_server_endpoint};
 
 const FRAME_BOUNDARY: &[u8] = b"AAAAAA031320050421";
@@ -22,12 +25,8 @@ const FRAME_BOUNDARY: &[u8] = b"AAAAAA031320050421";
 pub trait Packet {
     fn to_bytes(self) -> Bytes;
     
-    fn to_string(&self) -> String {
-        format!("{}", type_name::<Self>())
-    }
-    
     // https://stackoverflow.com/questions/33687447/how-to-get-a-reference-to-a-concrete-type-from-a-trait-object
-    fn as_any(self: Self) -> Box<dyn Any>;
+    // fn as_any(self: Self) -> Box<dyn Any>;
 }
 
 pub trait PacketBuilder<T: Packet + 'static> {
@@ -35,73 +34,19 @@ pub trait PacketBuilder<T: Packet + 'static> {
     fn read(&self, bytes: Bytes) -> Result<T, Box<dyn Error>>;
 }
 
-pub trait PacketReceiver {
-    type Item: Packet;
-    
-    fn receive(&mut self, packet: Self::Item) -> Result<(), Box<dyn Error>>;
-}
-
-pub trait PacketSender {
-    type Item: Packet;
-    
-    fn get_next_payloads(&mut self) -> Option<&[Self::Item]>; 
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, Display, ErrorMessageNew)]
 pub struct ConnectionError {
     message: String
 }
 
-impl ConnectionError {
-    fn new<S: Into<String>>(message: S) -> Self {
-        ConnectionError {
-            message: message.into()
-        }
-    }
-}
-
-impl Display for ConnectionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Display, ErrorMessageNew)]
 pub struct ReceiveError {
     message: String
 }
 
-impl ReceiveError {
-    fn new<S: Into<String>>(message: S) -> Self {
-        ReceiveError {
-            message: message.into()
-        }
-    }
-}
-
-impl Display for ReceiveError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Display, ErrorMessageNew)]
 pub struct SendError {
     message: String
-}
-
-impl SendError {
-    fn new<S: Into<String>>(message: S) -> Self {
-        SendError {
-            message: message.into()
-        }
-    }
-}
-
-impl Display for SendError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
 }
 
 pub struct PacketManager {
@@ -212,31 +157,9 @@ impl PacketManager {
                 //self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
                 // assert return of above is None
                 // TODO: Assert receivers exists
-
-                // let receive_thread = tokio::spawn(async move {
-                //     
-                //     loop {
-                //         // TODO: relay error message
-                //         // TODO: configurable size limit
-                //         let chunk = recv.read_chunk(usize::MAX, true).await.unwrap();
-                //         match chunk {
-                //             None => { break; }
-                //             Some(chunk) => {
-                //                 let bytes = chunk.bytes;
-                //                 let packet_type = self.receive_packets.get_by_left(&0).unwrap().into();
-                //                 let packet_builder = self.recv_packet_builders.get(self.receive_packets.get_by_left(&0).unwrap()).unwrap();
-                //                 let packet = packet_builder.downcast_ref::<dyn PacketBuilder>();
-                //                 //println!("{}", packet.to_string());
-                //             }
-                //         }
-                //     }
-                // });
             }
 
             println!("[client] Created connection!");
-
-            // Give the server has a chance to clean up
-            //endpoint.wait_idle().await;
         }
         
         Ok(())
@@ -248,8 +171,6 @@ impl PacketManager {
         self.receive_packets.insert(self.next_receive_id, packet_type_id);
         self.recv_packet_builders.insert(packet_type_id, Box::new(packet_builder));
         self.receive.insert(packet_type_id, SegQueue::new());  // TODO: validate return is None
-
-        println!("{:#?}", self.next_receive_id);
         
         let mut recv_stream = self.recv_streams.remove(&self.next_receive_id).unwrap();
         let (tx, rx) = mpsc::channel(100);
@@ -437,7 +358,7 @@ impl PacketManager {
     
     fn validate_packet_is_new<T: Packet + 'static>(&self, is_send: bool) -> Result<(), ReceiveError> {
         if (is_send && self.send_packets.contains_right(&TypeId::of::<T>())) || !is_send && self.receive_packets.contains_right(&TypeId::of::<T>()) {
-            return Err(ReceiveError { message: format!("Type '{}' was already registered!", type_name::<T>()) })
+            return Err(ReceiveError::new(format!("Type '{}' was already registered!", type_name::<T>())))
         } 
         Ok(())
     }
@@ -445,12 +366,12 @@ impl PacketManager {
     fn validate_packet_was_registered<T: Packet + 'static>(&self, is_send: bool) -> Result<(), ReceiveError> {
         if is_send {
             if !self.send_packets.contains_right(&TypeId::of::<T>()) {
-                return Err(ReceiveError { message: format!("Type '{}' was never registered!  Did you forget to call register_send_packet()?", type_name::<T>()) })
+                return Err(ReceiveError::new(format!("Type '{}' was never registered!  Did you forget to call register_send_packet()?", type_name::<T>())))
 
             }
         } else {
             if !self.receive_packets.contains_right(&TypeId::of::<T>()) {
-                return Err(ReceiveError { message: format!("Type '{}' was never registered!  Did you forget to call register_receive_packet()?", type_name::<T>()) })
+                return Err(ReceiveError::new(format!("Type '{}' was never registered!  Did you forget to call register_receive_packet()?", type_name::<T>())))
             }
         }
         Ok(())
@@ -459,11 +380,10 @@ impl PacketManager {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::error::Error;
     use std::time::Duration;
+
     use bytes::Bytes;
-    use tokio::io::AsyncWriteExt;
     use tokio::time::sleep;
 
     use crate::networking::packet::{Packet, PacketBuilder, PacketManager};
@@ -487,10 +407,6 @@ mod tests {
         fn to_bytes(self) -> Bytes {
             Bytes::copy_from_slice(&self.id.to_ne_bytes())
         }
-
-        fn as_any(self: Self) -> Box<dyn Any> {
-            Box::new(self)
-        }
     }
     
     #[derive(Copy, Clone)]
@@ -511,10 +427,6 @@ mod tests {
     impl Packet for Other {
         fn to_bytes(self) -> Bytes {
             Bytes::from([Bytes::from(self.name), Bytes::copy_from_slice(&self.id.to_ne_bytes())].concat())
-        }
-
-        fn as_any(self: Self) -> Box<dyn Any> {
-            Box::new(self)
         }
     }
 
@@ -562,15 +474,6 @@ mod tests {
         assert!(unwrapped.is_some());
         assert_eq!(unwrapped.unwrap(), vec![Other { name: "spoorn".to_string(), id: 4 }, Other { name: "kiko".to_string(), id: 6 }]);
     }
-    
-    #[test]
-    fn test_register_receive_packet() {
-        let mut manager = PacketManager::new();
-        assert!(manager.validate_packet_is_new::<Test>(false).is_ok());
-        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
-        assert!(manager.validate_packet_is_new::<Test>(false).is_err());
-        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_err());
-    }
 
     #[test]
     fn test_register_send_packet() {
@@ -581,30 +484,3 @@ mod tests {
         assert!(manager.register_send_packet::<Test>().is_err());
     }
 }
-
-// pub struct HandleRegister {
-//     receivers: HashMap<u32, Box<dyn PacketReceiver<Item=dyn Packet>>>,
-//     senders: Vec<(u32, Box<dyn PacketSender<Item=dyn Packet>>)>,
-//     next_receiver_id: u32,
-// }
-// 
-// impl HandleRegister {
-//     pub fn new() -> Self {
-//         HandleRegister {
-//             receivers: HashMap::new(),
-//             senders: Vec::new(),
-//             next_receiver_id: 0
-//         }
-//     }
-//     
-//     pub fn register_receiver(&mut self, receiver: impl PacketReceiver) -> Result<u32, Box<dyn Error>> {
-//         let receiver_id = self.next_receiver_id;
-//         self.receivers.insert(receiver_id, Box::new(receiver));
-//         self.next_receiver_id += 1;
-//         Ok(receiver_id)
-//     }
-//     
-//     pub fn register_sender(&mut self, sender: impl PacketSender) -> Result<u32, Box<dyn Error>> {
-//         return Ok(0)
-//     }
-// }
