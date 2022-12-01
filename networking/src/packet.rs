@@ -3,7 +3,6 @@ use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-use bevy::utils::label::DynEq;
 use bimap::BiMap;
 use bytes::Bytes;
 use crossbeam_queue::SegQueue;
@@ -12,13 +11,13 @@ use hashbrown::HashMap;
 use quinn::{RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::Receiver;
 use tokio::time::sleep;
 
-use networking::ErrorMessageNew;
+use networking_macros::ErrorMessageNew;
 
-use crate::networking::quinn_helpers::{make_client_endpoint, make_server_endpoint};
+use crate::quinn_helpers::{make_client_endpoint, make_server_endpoint};
 
 const FRAME_BOUNDARY: &[u8] = b"AAAAAA031320050421";
 
@@ -385,8 +384,7 @@ mod tests {
 
     use bytes::Bytes;
     use tokio::time::sleep;
-
-    use crate::networking::packet::{Packet, PacketBuilder, PacketManager};
+    use crate::packet::{Packet, PacketBuilder, PacketManager};
 
     enum MovementPacket {
         TURN(Test),

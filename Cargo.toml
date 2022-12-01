@@ -9,6 +9,7 @@ edition = "2021"
 
 members = [
     "networking",
+    "networking-macros"
 ]
 
 [dependencies]

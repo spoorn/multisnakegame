@@ -5,10 +5,17 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[lib]
-proc-macro = true
-
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "1.0", features = ["full"] }
+bimap = "0.6.2"
+bytes = "1.2.1"
+derive_more = "0.99.17"
+hashbrown = "0.13.1"
+rcgen = "0.10.0"
+rustls = { version = "0.20.7", default-features = false, features = ["quic", "dangerous_configuration"] }
+thiserror = "1.0.37"
+tokio = { version = "1.21.2", features = ["full"] }
+tokio-test = "0.4.2"
+crossbeam-queue = "0.3.7"
+# Read more on QUIC at https://http3-explained.haxx.se/
+quinn = "0.9.1"
+networking-macros = { path = "../networking-macros" }
