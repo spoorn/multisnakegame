@@ -28,7 +28,7 @@ pub trait Packet {
     // fn as_any(self: Self) -> Box<dyn Any>;
 }
 
-pub trait PacketBuilder<T: Packet + 'static> {
+pub trait PacketBuilder<T: Packet> {
     
     fn read(&self, bytes: Bytes) -> Result<T, Box<dyn Error>>;
 }
@@ -52,7 +52,6 @@ pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     receive: HashMap<TypeId, SegQueue<Bytes>>,
-    //send: HashMap<TypeId, SegQueue<Box<dyn Packet + Send>>>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send>>,
     recv_streams: HashMap<u32, RecvStream>,
     send_streams: HashMap<u32, SendStream>,
@@ -252,38 +251,30 @@ impl PacketManager {
     pub async fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
         self.validate_packet_was_registered::<T>(false)?;
         let packet_type_id = TypeId::of::<T>();
-        let queue = self.receive.get(&packet_type_id);
-        if queue.is_none() {
-            let queue: SegQueue<Bytes> = SegQueue::new();
-            self.receive.insert(TypeId::of::<T>(), queue);
-        }
-        let queue = self.receive.get(&packet_type_id).unwrap();
-        // TODO: simplify
         let rx = self.rx.get_mut(&packet_type_id).unwrap();
+        let mut res: Vec<T> = Vec::new();
+        let receiver = self.recv_packet_builders.get(&TypeId::of::<T>()).unwrap();
+        let packet_builder: &U = receiver.downcast_ref::<U>().unwrap();
+
+        // If blocking, wait for the first packet
+        if blocking {
+            match rx.recv().await {
+                None => { return Err(ReceiveError::new(format!("Channel for packet type {} closed unexpectedly!", type_name::<T>()))); }
+                Some(bytes) => {
+                    PacketManager::receive_bytes::<T, U>(bytes, packet_builder, &mut res)?;
+                }
+            }
+        }
+        
+        // Loop for any subsequent packets
         loop {
-            let receiver = self.recv_packet_builders.remove(&TypeId::of::<T>()).unwrap();
-            println!("try receive");
             match rx.try_recv() {
                 Ok(bytes) => {
-                    println!("Received bytes");
-                    queue.push(bytes);
-                    self.recv_packet_builders.insert(packet_type_id, receiver);
+                    PacketManager::receive_bytes::<T, U>(bytes, packet_builder, &mut res)?;
                 }
                 Err(e) => {
-                    self.recv_packet_builders.insert(packet_type_id, receiver);
                     match e {
-                        TryRecvError::Empty => {
-                            // TODO: allow blocking
-                            if blocking && queue.is_empty() {
-                                println!("sleeping");
-                                // Have to use tokio's sleep so it can yield to the tokio executor
-                                // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
-                                sleep(Duration::from_millis(1000)).await;
-                                println!("woke up");
-                            } else {
-                                break;
-                            }
-                        }
+                        TryRecvError::Empty => { break; }
                         TryRecvError::Disconnected => {
                             return Err(ReceiveError::new(format!("Receiver channel for type {} was disconnected", type_name::<T>())));
                         }
@@ -291,40 +282,8 @@ impl PacketManager {
                 }
             }
         }
-        
-        match self.receive.get(&packet_type_id) {
-            None => { return Err(ReceiveError::new(format!("Receive queue did not contain type {}", type_name::<T>()))); }
-            Some(packets) => {
-                let size = packets.len();
-                if size == 0 {
-                    return Ok(None);
-                }
-                
-                let mut res: Vec<T> = Vec::new();
-                let receiver = self.recv_packet_builders.remove(&TypeId::of::<T>()).unwrap();
-                for _ in 0..size {
-                    let e = packets.pop();
-                    match e {
-                        None => { return Err(ReceiveError::new(format!("Queue for type {} contained empty Packet", type_name::<T>()))) }
-                        Some(packet_bytes) => {
-                            let packet_builder: &U = receiver.downcast_ref::<U>().unwrap();
-                            let packet = packet_builder.read(packet_bytes).unwrap();
-                            res.push(packet);
-                            // if p.is::<T>() {
-                            //     let x = p.downcast::<T>().unwrap();
-                            //     res.push(*x);
-                            // } else {
-                            //     return Err(ReceiveError::new("Packet was of incorrect type, this should not have happened!"))
-                            // }
-                           
-                        }
-                    }
-                }
-                
-                self.recv_packet_builders.insert(TypeId::of::<T>(), receiver);
-                Ok(Some(res))
-            }
-        }
+
+        Ok(Some(res))
     }
     
     pub async fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
@@ -334,25 +293,7 @@ impl PacketManager {
         let send_stream = self.send_streams.get_mut(id).unwrap();
         send_stream.write_chunk(bytes).await.unwrap();
         send_stream.write_all(FRAME_BOUNDARY).await.unwrap();
-        println!("Sent packet");
         Ok(())
-    }
-    
-    fn receive_packet<T: Packet + 'static>(&mut self, packet: T) {
-        let validate = self.validate_packet_was_registered::<T>(false);
-        if let Err(e) = validate {
-            panic!("{}", e.message);
-        }
-        match self.receive.get(&TypeId::of::<T>()) {
-            None => {
-                let queue: SegQueue<Bytes> = SegQueue::new();
-                queue.push(packet.to_bytes());
-                self.receive.insert(TypeId::of::<T>(), queue);
-            }
-            Some(queue) => {
-                queue.push(packet.to_bytes());
-            }
-        }
     }
     
     fn validate_packet_is_new<T: Packet + 'static>(&self, is_send: bool) -> Result<(), ReceiveError> {
@@ -366,13 +307,23 @@ impl PacketManager {
         if is_send {
             if !self.send_packets.contains_right(&TypeId::of::<T>()) {
                 return Err(ReceiveError::new(format!("Type '{}' was never registered!  Did you forget to call register_send_packet()?", type_name::<T>())))
-
             }
         } else {
             if !self.receive_packets.contains_right(&TypeId::of::<T>()) {
                 return Err(ReceiveError::new(format!("Type '{}' was never registered!  Did you forget to call register_receive_packet()?", type_name::<T>())))
             }
         }
+        Ok(())
+    }
+    
+    #[inline]
+    fn receive_bytes<T: Packet + 'static, U: PacketBuilder<T> + 'static>(bytes: Bytes, packet_builder: &U, res: &mut Vec<T>) -> Result<(), ReceiveError> {
+        if bytes.is_empty() {
+            return Err(ReceiveError::new("Received empty bytes!"));
+        }
+        println!("Received packet #{} for type {}", res.len(), type_name::<T>());
+        let packet = packet_builder.read(bytes).unwrap();
+        res.push(packet);
         Ok(())
     }
 }
@@ -451,7 +402,9 @@ mod tests {
             assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
             assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
             loop {
-                sleep(Duration::from_millis(10000)).await;
+                // Have to use tokio's sleep so it can yield to the tokio executor
+                // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
+                sleep(Duration::from_millis(100)).await;
             }
         });
         let client = manager.init_connection(false, 2).await;
