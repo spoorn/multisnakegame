@@ -1,7 +1,6 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
 use std::fmt::{Debug, Display};
-use std::time::Duration;
 
 use bimap::BiMap;
 use bytes::Bytes;
@@ -13,7 +12,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
-use tokio::time::sleep;
 
 use networking_macros::ErrorMessageNew;
 
@@ -182,11 +180,9 @@ impl PacketManager {
                                     let frame = bytes.slice(offset..*i);
                                     match partial_chunk.take() {
                                         None => {
-                                            println!("tx whole bytes");
                                             tx.send(frame).await.unwrap();
                                         },
                                         Some(part) => {
-                                            println!("tx partial bytes");
                                             let reconstructed_frame = Bytes::from([part, frame].concat());
                                             tx.send(reconstructed_frame).await.unwrap();
                                         }
@@ -195,7 +191,6 @@ impl PacketManager {
                                 }
 
                                 if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
-                                    println!("Dangling prefix part at end of stream");
                                     let prefix_part = bytes.slice(offset..bytes.len());
                                     match partial_chunk.take() {
                                         None => {
@@ -305,63 +300,24 @@ impl PacketManager {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-    use std::time::Duration;
 
-    use bytes::Bytes;
     use tokio::sync::mpsc;
-    use tokio::time::sleep;
+
+    use networking_macros::bincode_packet;
+
     use crate::packet::{Packet, PacketBuilder, PacketManager};
 
-    enum MovementPacket {
-        TURN(Test),
-        STOP(Other)
-    }
-    
-    enum ActionPacket {
-        EAT,
-        SLEEP
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[bincode_packet]
+    #[derive(Debug, PartialEq, Eq)]
     struct Test {
         id: i32
     }
-    
-    impl Packet for Test {
-        fn to_bytes(self) -> Bytes {
-            Bytes::copy_from_slice(&self.id.to_ne_bytes())
-        }
-    }
-    
-    #[derive(Copy, Clone)]
-    struct TestBuilder;
-    impl PacketBuilder<Test> for TestBuilder {
-    
-        fn read(&self, bytes: Bytes) -> Result<Test, Box<dyn Error>> {
-            Ok(Test{id: i32::from_ne_bytes(bytes[..].try_into().unwrap())})
-        }
-    }
 
+    #[bincode_packet]
     #[derive(Debug, PartialEq, Eq)]
     struct Other {
         name: String,
         id: i32
-    }
-
-    impl Packet for Other {
-        fn to_bytes(self) -> Bytes {
-            Bytes::from([Bytes::from(self.name), Bytes::copy_from_slice(&self.id.to_ne_bytes())].concat())
-        }
-    }
-
-    #[derive(Copy, Clone)]
-    struct OtherBuilder;
-    impl PacketBuilder<Other> for OtherBuilder {
-
-        fn read(&self, bytes: Bytes) -> Result<Other, Box<dyn Error>> {
-            Ok(Other{name: std::str::from_utf8(&bytes[..bytes.len()-4]).unwrap().to_string(), id: i32::from_ne_bytes(bytes[bytes.len()-4..].try_into().unwrap())})
-        }
     }
 
     #[tokio::test]
@@ -376,8 +332,8 @@ mod tests {
             m.init_connection(true, 2, 2).await;
             assert!(m.register_send_packet::<Test>().is_ok());
             assert!(m.register_send_packet::<Other>().is_ok());
-            assert!(m.register_receive_packet::<Test>(TestBuilder).is_ok());
-            assert!(m.register_receive_packet::<Other>(OtherBuilder).is_ok());
+            assert!(m.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
+            assert!(m.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
             
             for _ in 0..100 {
                 assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
@@ -385,13 +341,12 @@ mod tests {
                 assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
                 assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
                 
-                // TODO: uncomment and debug timeout issue
-                let test_res = m.received::<Test, TestBuilder>(true).await;
+                let test_res = m.received::<Test, TestPacketBuilder>(true).await;
                 assert!(test_res.is_ok());
                 let unwrapped = test_res.unwrap();
                 assert!(unwrapped.is_some());
                 assert_eq!(unwrapped.unwrap(), vec![Test { id: 6 }, Test { id: 9 }]);
-                let other_res = m.received::<Other, OtherBuilder>(true).await;
+                let other_res = m.received::<Other, OtherPacketBuilder>(true).await;
                 assert!(other_res.is_ok());
                 let unwrapped = other_res.unwrap();
                 assert!(unwrapped.is_some());
@@ -411,8 +366,8 @@ mod tests {
         println!("{:#?}", client);
         
         assert!(client.is_ok());
-        assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
-        assert!(manager.register_receive_packet::<Other>(OtherBuilder).is_ok());
+        assert!(manager.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
+        assert!(manager.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
         assert!(manager.register_send_packet::<Test>().is_ok());
         assert!(manager.register_send_packet::<Other>().is_ok());
         
@@ -423,12 +378,12 @@ mod tests {
             assert!(manager.send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
             assert!(manager.send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
             
-            let test_res = manager.received::<Test, TestBuilder>(true).await;
+            let test_res = manager.received::<Test, TestPacketBuilder>(true).await;
             assert!(test_res.is_ok());
             let unwrapped = test_res.unwrap();
             assert!(unwrapped.is_some());
             assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
-            let other_res = manager.received::<Other, OtherBuilder>(true).await;
+            let other_res = manager.received::<Other, OtherPacketBuilder>(true).await;
             assert!(other_res.is_ok());
             let unwrapped = other_res.unwrap();
             assert!(unwrapped.is_some());
