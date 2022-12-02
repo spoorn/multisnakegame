@@ -2,7 +2,6 @@ use proc_macro::{self, TokenStream};
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{Data, DataStruct, Fields, parse_macro_input, DeriveInput};
-use syn::parse::Parser;
 
 #[proc_macro_attribute]
 pub fn bincode_packet(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
@@ -21,7 +20,7 @@ pub fn bin_packet(tokens: TokenStream) -> TokenStream {
     let packet_builder_name = Ident::new((name.to_string() + "PacketBuilder").as_str(), Span::call_site());
     
     return quote! {
-        impl Packet for #name {
+        impl networking::packet::Packet for #name {
             fn to_bytes(self) -> bytes::Bytes {
                 bytes::Bytes::from(bincode::serialize(&self).unwrap())
             }
@@ -29,7 +28,7 @@ pub fn bin_packet(tokens: TokenStream) -> TokenStream {
         
         #[derive(Copy, Clone)]
         struct #packet_builder_name;
-        impl PacketBuilder<#name> for #packet_builder_name {
+        impl networking::packet::PacketBuilder<#name> for #packet_builder_name {
         
             fn read(&self, bytes: bytes::Bytes) -> Result<#name, Box<dyn std::error::Error>> {
                 Ok(bincode::deserialize(bytes.as_ref()).unwrap())
@@ -43,7 +42,7 @@ pub fn error_message_new(tokens: TokenStream) -> TokenStream {
     let input = parse_macro_input!(tokens as DeriveInput);
     let name = input.ident;
 
-    let mut fields_punct = match input.data {
+    let fields_punct = match input.data {
         Data::Struct(DataStruct {
                          fields: Fields::Named(fields),
                          ..

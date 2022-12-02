@@ -1,6 +1,6 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 use bimap::BiMap;
 use bytes::Bytes;
@@ -83,7 +83,7 @@ impl PacketManager {
         let server_addr = "127.0.0.1:5000".parse().unwrap();
         let client_addr = "127.0.0.1:5001".parse().unwrap();
         
-        let conn: Connection;;
+        let conn: Connection;
         
         if is_server {
             let (endpoint, server_cert) = make_server_endpoint(server_addr)?;
@@ -94,7 +94,7 @@ impl PacketManager {
             println!("[server] connection accepted: addr={}", conn.remote_address());
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
-            let mut endpoint = make_client_endpoint(client_addr, &[])?;
+            let endpoint = make_client_endpoint(client_addr, &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
             conn = endpoint.connect(server_addr, "localhost")?.await?;
@@ -300,12 +300,12 @@ impl PacketManager {
 
 #[cfg(test)]
 mod tests {
-
     use tokio::sync::mpsc;
 
+    use networking::packet::PacketManager;
     use networking_macros::bincode_packet;
 
-    use crate::packet::{Packet, PacketBuilder, PacketManager};
+    use crate as networking;
 
     #[bincode_packet]
     #[derive(Debug, PartialEq, Eq)]
@@ -329,7 +329,7 @@ mod tests {
         // Server
         let server = tokio::spawn(async move {
             let mut m = PacketManager::new();
-            m.init_connection(true, 2, 2).await;
+            assert!(m.init_connection(true, 2, 2).await.is_ok());
             assert!(m.register_send_packet::<Test>().is_ok());
             assert!(m.register_send_packet::<Other>().is_ok());
             assert!(m.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
