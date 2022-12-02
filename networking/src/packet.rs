@@ -378,24 +378,27 @@ mod tests {
             assert!(m.register_send_packet::<Other>().is_ok());
             assert!(m.register_receive_packet::<Test>(TestBuilder).is_ok());
             assert!(m.register_receive_packet::<Other>(OtherBuilder).is_ok());
-            assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
-            assert!(m.send::<Test>(Test { id: 8 }).await.is_ok());
-            assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
-            assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
             
-            // TODO: uncomment and debug timeout issue
-            let test_res = m.received::<Test, TestBuilder>(true).await;
-            assert!(test_res.is_ok());
-            let unwrapped = test_res.unwrap();
-            assert!(unwrapped.is_some());
-            assert_eq!(unwrapped.unwrap(), vec![Test { id: 6 }, Test { id: 9 }]);
-            let other_res = m.received::<Other, OtherBuilder>(true).await;
-            assert!(other_res.is_ok());
-            let unwrapped = other_res.unwrap();
-            assert!(unwrapped.is_some());
-            assert_eq!(unwrapped.unwrap(), vec![Other { name: "mango".to_string(), id: 1 }, Other { name: "luna".to_string(), id: 3 }]);
+            for _ in 0..100 {
+                assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
+                assert!(m.send::<Test>(Test { id: 8 }).await.is_ok());
+                assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
+                assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
+                
+                // TODO: uncomment and debug timeout issue
+                let test_res = m.received::<Test, TestBuilder>(true).await;
+                assert!(test_res.is_ok());
+                let unwrapped = test_res.unwrap();
+                assert!(unwrapped.is_some());
+                assert_eq!(unwrapped.unwrap(), vec![Test { id: 6 }, Test { id: 9 }]);
+                let other_res = m.received::<Other, OtherBuilder>(true).await;
+                assert!(other_res.is_ok());
+                let unwrapped = other_res.unwrap();
+                assert!(unwrapped.is_some());
+                assert_eq!(unwrapped.unwrap(), vec![Other { name: "mango".to_string(), id: 1 }, Other { name: "luna".to_string(), id: 3 }]);
+            }
             
-            rx.recv();
+            rx.recv().await;
             // loop {
             //     // Have to use tokio's sleep so it can yield to the tokio executor
             //     // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
@@ -413,24 +416,26 @@ mod tests {
         assert!(manager.register_send_packet::<Test>().is_ok());
         assert!(manager.register_send_packet::<Other>().is_ok());
         
-        let test_res = manager.received::<Test, TestBuilder>(true).await;
-        assert!(test_res.is_ok());
-        let unwrapped = test_res.unwrap();
-        assert!(unwrapped.is_some());
-        assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
-        let other_res = manager.received::<Other, OtherBuilder>(true).await;
-        assert!(other_res.is_ok());
-        let unwrapped = other_res.unwrap();
-        assert!(unwrapped.is_some());
-        assert_eq!(unwrapped.unwrap(), vec![Other { name: "spoorn".to_string(), id: 4 }, Other { name: "kiko".to_string(), id: 6 }]);
-
-        // Send packets
-        assert!(manager.send::<Test>(Test { id: 6 }).await.is_ok());
-        assert!(manager.send::<Test>(Test { id: 9 }).await.is_ok());
-        assert!(manager.send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
-        assert!(manager.send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+        for _ in 0..100 {
+            // Send packets
+            assert!(manager.send::<Test>(Test { id: 6 }).await.is_ok());
+            assert!(manager.send::<Test>(Test { id: 9 }).await.is_ok());
+            assert!(manager.send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
+            assert!(manager.send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+            
+            let test_res = manager.received::<Test, TestBuilder>(true).await;
+            assert!(test_res.is_ok());
+            let unwrapped = test_res.unwrap();
+            assert!(unwrapped.is_some());
+            assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
+            let other_res = manager.received::<Other, OtherBuilder>(true).await;
+            assert!(other_res.is_ok());
+            let unwrapped = other_res.unwrap();
+            assert!(unwrapped.is_some());
+            assert_eq!(unwrapped.unwrap(), vec![Other { name: "spoorn".to_string(), id: 4 }, Other { name: "kiko".to_string(), id: 6 }]);
+        }
         
-        tx.send(0);
+        tx.send(0).await.unwrap();
         assert!(server.await.is_ok());
     }
 
