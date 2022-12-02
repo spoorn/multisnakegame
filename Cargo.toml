@@ -14,20 +14,12 @@ members = [
 
 [dependencies]
 bevy = { version = "0.8.1" }
-bimap = "0.6.2"
 bytes = "1.2.1"
-crossbeam-queue = "0.3.7"
 derive_more = "0.99.17"
 hashbrown = "0.13.1"
 iyes_loopless = "0.8.0"
-# Read more on QUIC at https://http3-explained.haxx.se/
-quinn = "0.9.1"
 rand = "0.8.5"
-rcgen = "0.10.0"
-rustls = { version = "0.20.7", default-features = false, features = ["quic", "dangerous_configuration"] }
-thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["full"] }
-tokio-test = "0.4.2"
 networking = { path = "networking" }
 
 # Enable a small amount of optimization in debug mode

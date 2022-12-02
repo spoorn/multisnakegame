@@ -9,7 +9,6 @@ mod ui;
 // Test
 mod client;
 mod server;
-mod networking;
 
 
 #[tokio::main]
