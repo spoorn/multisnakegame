@@ -74,14 +74,13 @@ impl PacketManager {
         }
     }
 
-    pub async fn init_connection(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32) -> Result<(), Box<dyn Error>> {
+    pub async fn init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
         // if expected_num_accepts_uni != self.next_receive_id {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
         // }
         
         // TODO: assert num streams equals registered
-        let server_addr = "127.0.0.1:5000".parse().unwrap();
-        let client_addr = "127.0.0.1:5001".parse().unwrap();
+        let server_addr = server_addr.into().parse().unwrap();
         
         let conn: Connection;
         
@@ -94,7 +93,7 @@ impl PacketManager {
             println!("[server] connection accepted: addr={}", conn.remote_address());
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
-            let endpoint = make_client_endpoint(client_addr, &[])?;
+            let endpoint = make_client_endpoint(client_addr.unwrap().into().parse().unwrap(), &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
             conn = endpoint.connect(server_addr, "localhost")?.await?;
@@ -325,11 +324,13 @@ mod tests {
         let mut manager = PacketManager::new();
         
         let (tx, mut rx) = mpsc::channel(100);
+        let server_addr = "127.0.0.1:5000";
+        let client_addr = "127.0.0.1:5001";
         
         // Server
         let server = tokio::spawn(async move {
             let mut m = PacketManager::new();
-            assert!(m.init_connection(true, 2, 2).await.is_ok());
+            assert!(m.init_connection(true, 2, 2, server_addr, None).await.is_ok());
             assert!(m.register_send_packet::<Test>().is_ok());
             assert!(m.register_send_packet::<Other>().is_ok());
             assert!(m.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
@@ -362,7 +363,7 @@ mod tests {
         });
         
         // Client
-        let client = manager.init_connection(false, 2, 2).await;
+        let client = manager.init_connection(false, 2, 2, server_addr, Some(client_addr)).await;
         println!("{:#?}", client);
         
         assert!(client.is_ok());
