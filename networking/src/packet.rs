@@ -8,7 +8,7 @@ use bytes::Bytes;
 use crossbeam_queue::SegQueue;
 use derive_more::Display;
 use hashbrown::HashMap;
-use quinn::{RecvStream, SendStream};
+use quinn::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -76,88 +76,60 @@ impl PacketManager {
         }
     }
 
-    pub async fn init_connection(&mut self, is_server: bool, expected_num_accepts_uni: u32) -> Result<(), Box<dyn Error>> {
+    pub async fn init_connection(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32) -> Result<(), Box<dyn Error>> {
         // if expected_num_accepts_uni != self.next_receive_id {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
         // }
+        
+        // TODO: assert num streams equals registered
         let server_addr = "127.0.0.1:5000".parse().unwrap();
         let client_addr = "127.0.0.1:5001".parse().unwrap();
+        
+        let conn: Connection;;
         
         if is_server {
             let (endpoint, server_cert) = make_server_endpoint(server_addr)?;
 
             // Single connection
             let incoming_conn = endpoint.accept().await.unwrap();
-            let conn = incoming_conn.await.unwrap();
+            conn = incoming_conn.await.unwrap();
             println!("[server] connection accepted: addr={}", conn.remote_address());
-
-            // Note: Packets are not sent immediately upon the write.  The thread needs to be kept
-            // open so that the packets can actually be sent over the wire to the client.
-            for i in 0..expected_num_accepts_uni {
-                let mut send_stream = conn
-                    .open_uni()
-                    .await?;
-                println!("opened");
-                send_stream.write_u32(i).await?;
-                println!("write");
-                self.send_streams.insert(i, send_stream);
-                
-                // let (tx, mut rx) = mpsc::channel(100);
-                // // TODO: Add tx to senders
-                // self.send.insert(i, tx);
-                // let send_thread = tokio::spawn(async move {
-                //     loop {
-                //         println!("### SEND THREAD");
-                //         match rx.try_recv() {
-                //             Ok(bytes) => {
-                //                 println!("Writing bytes");
-                //                 send_stream.write_chunk(bytes).await.unwrap();
-                //             }
-                //             Err(e) => {
-                //                 match e {
-                //                     TryRecvError::Empty => {
-                //                         sleep(Duration::from_millis(1000)).await;
-                //                     }
-                //                     TryRecvError::Disconnected => {
-                //                         return Box::new(SendError::new(format!("Packet sender disconnected for packet {}", i)));
-                //                     }
-                //                 }
-                //             }
-                //         }
-                //     } 
-                // });
-            }
-            
-            // loop {
-            //     // Loop to keep server alive
-            //     sleep(Duration::from_millis(10000)).await;
-            // }
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
             let mut endpoint = make_client_endpoint(client_addr, &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
-            let connection = endpoint.connect(server_addr, "localhost")?.await?;
-            println!("[client] connected: addr={}", connection.remote_address());
+            conn = endpoint.connect(server_addr, "localhost")?.await?;
+            println!("[client] connected: addr={}", conn.remote_address());
+        }
 
-            for i in 0..expected_num_accepts_uni {
-                println!("### waiting");
-                let mut recv = connection.accept_uni().await?;
-                println!("### connection");
-                let id = recv.read_u32().await?;
-                println!("read {}", id);
-                // if id >= self.next_receive_id {
-                //     return Err(Box::new(ConnectionError::new(format!("Received unexpected packet ID {} from server", id))));
-                // }
+        // Note: Packets are not sent immediately upon the write.  The thread needs to be kept
+        // open so that the packets can actually be sent over the wire to the client.
+        for i in 0..num_outgoing_streams {
+            println!("Opening outgoing stream for packet id {}", i);
+            let mut send_stream = conn
+                .open_uni()
+                .await?;
+            println!("Writing packet id {}", i);
+            send_stream.write_u32(i).await?;
+            self.send_streams.insert(i, send_stream);
+        }
 
-                self.recv_streams.insert(i, recv);
+        for i in 0..num_incoming_streams {
+            println!("Accepting incoming stream for packet id {}", i);
+            let mut recv = conn.accept_uni().await?;
+            println!("Validating incoming packet id {}", i);
+            let id = recv.read_u32().await?;
+            println!("Received incoming packet id {}", id);
+            // if id >= self.next_receive_id {
+            //     return Err(Box::new(ConnectionError::new(format!("Received unexpected packet ID {} from server", id))));
+            // }
 
-                //self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
-                // assert return of above is None
-                // TODO: Assert receivers exists
-            }
+            self.recv_streams.insert(i, recv);
 
-            println!("[client] Created connection!");
+            //self.receive.insert(*self.receive_packets.get_by_left(&id).unwrap(), SegQueue::new());
+            // assert return of above is None
+            // TODO: Assert receivers exists
         }
         
         Ok(())
@@ -170,75 +142,79 @@ impl PacketManager {
         self.recv_packet_builders.insert(packet_type_id, Box::new(packet_builder));
         self.receive.insert(packet_type_id, SegQueue::new());  // TODO: validate return is None
         
-        let mut recv_stream = self.recv_streams.remove(&self.next_receive_id).unwrap();
-        let (tx, rx) = mpsc::channel(100);
-        
-        // TODO: Add receive_thread to rx for validations
-        self.rx.insert(packet_type_id, rx);
-        let receive_thread = tokio::spawn(async move {
-            let mut partial_chunk: Option<Bytes> = None;
-            loop {
-                println!("### RECEIVE THREAD");
-                // TODO: relay error message
-                // TODO: configurable size limit
-                let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
-                println!("### GOT DATA");
-                match chunk {
-                    None => { 
-                        // TODO: Error
-                        break;
-                    }
-                    Some(chunk) => {
-                        let bytes;
-                        match partial_chunk.take() {
+        match self.recv_streams.remove(&self.next_receive_id) {
+            None => {
+                return Err(ReceiveError::new(format!("recv stream does not exist for packet type={}, id={}.  Did you forget to call init_connection() on your PacketManager?", type_name::<T>(), self.next_receive_id)));
+            }
+            Some(mut recv_stream) => {
+                let (tx, rx) = mpsc::channel(100);
+
+                // TODO: Add receive_thread to rx for validations
+                self.rx.insert(packet_type_id, rx);
+                let receive_thread = tokio::spawn(async move {
+                    let mut partial_chunk: Option<Bytes> = None;
+                    loop {
+                        // TODO: relay error message
+                        // TODO: configurable size limit
+                        let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
+                        match chunk {
                             None => {
-                                bytes = chunk.bytes;
-                            }
-                            Some(part) => {
-                                bytes = Bytes::from([part, chunk.bytes].concat());
-                            }
-                        }
-                        let boundaries: Vec<usize> = bytes.windows(FRAME_BOUNDARY.len()).enumerate().filter(|(_, w)| matches!(*w, FRAME_BOUNDARY)).map(|(i, _)| i).collect();
-                        let mut offset = 0;
-                        for i in boundaries.iter() {
-                            // Reached end of bytes
-                            if offset >= bytes.len() {
+                                // TODO: Error
                                 break;
                             }
-                            let frame = bytes.slice(offset..*i);
-                            match partial_chunk.take() {
-                                None => {
-                                    println!("tx whole bytes");
-                                    tx.send(frame).await.unwrap();
-                                },
-                                Some(part) => {
-                                    println!("tx partial bytes");
-                                    let reconstructed_frame = Bytes::from([part, frame].concat());
-                                    tx.send(reconstructed_frame).await.unwrap();
+                            Some(chunk) => {
+                                let bytes;
+                                match partial_chunk.take() {
+                                    None => {
+                                        bytes = chunk.bytes;
+                                    }
+                                    Some(part) => {
+                                        bytes = Bytes::from([part, chunk.bytes].concat());
+                                    }
                                 }
-                            }
-                            offset = i + FRAME_BOUNDARY.len();
-                        }
-                        
-                        if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
-                            println!("Dangling prefix part at end of stream");
-                            let prefix_part = bytes.slice(offset..bytes.len());
-                            match partial_chunk.take() {
-                                None => {
-                                    partial_chunk = Some(prefix_part);
+                                let boundaries: Vec<usize> = bytes.windows(FRAME_BOUNDARY.len()).enumerate().filter(|(_, w)| matches!(*w, FRAME_BOUNDARY)).map(|(i, _)| i).collect();
+                                let mut offset = 0;
+                                for i in boundaries.iter() {
+                                    // Reached end of bytes
+                                    if offset >= bytes.len() {
+                                        break;
+                                    }
+                                    let frame = bytes.slice(offset..*i);
+                                    match partial_chunk.take() {
+                                        None => {
+                                            println!("tx whole bytes");
+                                            tx.send(frame).await.unwrap();
+                                        },
+                                        Some(part) => {
+                                            println!("tx partial bytes");
+                                            let reconstructed_frame = Bytes::from([part, frame].concat());
+                                            tx.send(reconstructed_frame).await.unwrap();
+                                        }
+                                    }
+                                    offset = i + FRAME_BOUNDARY.len();
                                 }
-                                Some(part) => {
-                                    partial_chunk = Some(Bytes::from([part, prefix_part].concat()))
+
+                                if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
+                                    println!("Dangling prefix part at end of stream");
+                                    let prefix_part = bytes.slice(offset..bytes.len());
+                                    match partial_chunk.take() {
+                                        None => {
+                                            partial_chunk = Some(prefix_part);
+                                        }
+                                        Some(part) => {
+                                            partial_chunk = Some(Bytes::from([part, prefix_part].concat()))
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            }
-        });
+                });
 
-        self.next_receive_id += 1;
-        Ok(())
+                self.next_receive_id += 1;
+                Ok(())
+            }
+        }
     }
     
     pub fn register_send_packet<T: Packet + 'static>(&mut self) -> Result<(), ReceiveError> {
@@ -253,8 +229,7 @@ impl PacketManager {
         let packet_type_id = TypeId::of::<T>();
         let rx = self.rx.get_mut(&packet_type_id).unwrap();
         let mut res: Vec<T> = Vec::new();
-        let receiver = self.recv_packet_builders.get(&TypeId::of::<T>()).unwrap();
-        let packet_builder: &U = receiver.downcast_ref::<U>().unwrap();
+        let packet_builder: &U = self.recv_packet_builders.get(&TypeId::of::<T>()).unwrap().downcast_ref::<U>().unwrap();
 
         // If blocking, wait for the first packet
         if blocking {
@@ -334,6 +309,7 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
+    use tokio::sync::mpsc;
     use tokio::time::sleep;
     use crate::packet::{Packet, PacketBuilder, PacketManager};
 
@@ -391,28 +367,51 @@ mod tests {
     #[tokio::test]
     async fn receive_packet_e2e() {
         let mut manager = PacketManager::new();
-        let server = tokio::spawn(async {
+        
+        let (tx, mut rx) = mpsc::channel(100);
+        
+        // Server
+        let server = tokio::spawn(async move {
             let mut m = PacketManager::new();
-            m.init_connection(true, 2).await;
-            println!("Done init server");
+            m.init_connection(true, 2, 2).await;
             assert!(m.register_send_packet::<Test>().is_ok());
             assert!(m.register_send_packet::<Other>().is_ok());
+            assert!(m.register_receive_packet::<Test>(TestBuilder).is_ok());
+            assert!(m.register_receive_packet::<Other>(OtherBuilder).is_ok());
             assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
             assert!(m.send::<Test>(Test { id: 8 }).await.is_ok());
             assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
             assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
-            loop {
-                // Have to use tokio's sleep so it can yield to the tokio executor
-                // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
-                sleep(Duration::from_millis(100)).await;
-            }
+            
+            // TODO: uncomment and debug timeout issue
+            let test_res = m.received::<Test, TestBuilder>(true).await;
+            assert!(test_res.is_ok());
+            let unwrapped = test_res.unwrap();
+            assert!(unwrapped.is_some());
+            assert_eq!(unwrapped.unwrap(), vec![Test { id: 6 }, Test { id: 9 }]);
+            let other_res = m.received::<Other, OtherBuilder>(true).await;
+            assert!(other_res.is_ok());
+            let unwrapped = other_res.unwrap();
+            assert!(unwrapped.is_some());
+            assert_eq!(unwrapped.unwrap(), vec![Other { name: "mango".to_string(), id: 1 }, Other { name: "luna".to_string(), id: 3 }]);
+            
+            rx.recv();
+            // loop {
+            //     // Have to use tokio's sleep so it can yield to the tokio executor
+            //     // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
+            //     //sleep(Duration::from_millis(100)).await;
+            // }
         });
-        let client = manager.init_connection(false, 2).await;
+        
+        // Client
+        let client = manager.init_connection(false, 2, 2).await;
         println!("{:#?}", client);
         
         assert!(client.is_ok());
         assert!(manager.register_receive_packet::<Test>(TestBuilder).is_ok());
         assert!(manager.register_receive_packet::<Other>(OtherBuilder).is_ok());
+        assert!(manager.register_send_packet::<Test>().is_ok());
+        assert!(manager.register_send_packet::<Other>().is_ok());
         
         let test_res = manager.received::<Test, TestBuilder>(true).await;
         assert!(test_res.is_ok());
@@ -424,6 +423,15 @@ mod tests {
         let unwrapped = other_res.unwrap();
         assert!(unwrapped.is_some());
         assert_eq!(unwrapped.unwrap(), vec![Other { name: "spoorn".to_string(), id: 4 }, Other { name: "kiko".to_string(), id: 6 }]);
+
+        // Send packets
+        assert!(manager.send::<Test>(Test { id: 6 }).await.is_ok());
+        assert!(manager.send::<Test>(Test { id: 9 }).await.is_ok());
+        assert!(manager.send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
+        assert!(manager.send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+        
+        tx.send(0);
+        assert!(server.await.is_ok());
     }
 
     #[test]

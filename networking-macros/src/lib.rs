@@ -1,6 +1,6 @@
 use proc_macro::{self, TokenStream};
 use quote::quote;
-use syn::{Data, DataStruct, Fields, parse_macro_input, DeriveInput, Field};
+use syn::{Data, DataStruct, Fields, parse_macro_input, DeriveInput};
 use syn::parse::Parser;
 
 #[proc_macro_derive(ErrorMessageNew)]
