@@ -4,7 +4,6 @@ use std::fmt::Debug;
 
 use bimap::BiMap;
 use bytes::Bytes;
-use crossbeam_queue::SegQueue;
 use derive_more::Display;
 use hashbrown::HashMap;
 use quinn::{Connection, RecvStream, SendStream};
@@ -31,7 +30,7 @@ pub trait PacketBuilder<T: Packet> {
     fn read(&self, bytes: Bytes) -> Result<T, Box<dyn Error>>;
 }
 
-#[derive(Debug, Clone, thiserror::Error, Display, ErrorMessageNew)]
+#[derive(Debug, Clone, Display, ErrorMessageNew)]
 pub struct ConnectionError {
     message: String
 }
@@ -49,7 +48,6 @@ pub struct SendError {
 pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
-    receive: HashMap<TypeId, SegQueue<Bytes>>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send>>,
     recv_streams: HashMap<u32, RecvStream>,
     send_streams: HashMap<u32, SendStream>,
@@ -64,7 +62,6 @@ impl PacketManager {
         PacketManager {
             receive_packets: BiMap::new(),
             send_packets: BiMap::new(),
-            receive: HashMap::new(),
             recv_packet_builders: HashMap::new(),
             recv_streams: HashMap::new(),
             send_streams: HashMap::new(),
@@ -137,7 +134,6 @@ impl PacketManager {
         let packet_type_id = TypeId::of::<T>();
         self.receive_packets.insert(self.next_receive_id, packet_type_id);
         self.recv_packet_builders.insert(packet_type_id, Box::new(packet_builder));
-        self.receive.insert(packet_type_id, SegQueue::new());  // TODO: validate return is None
         
         match self.recv_streams.remove(&self.next_receive_id) {
             None => {

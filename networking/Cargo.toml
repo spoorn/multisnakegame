@@ -15,7 +15,6 @@ rustls = { version = "0.20.7", default-features = false, features = ["quic", "da
 thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["full"] }
 tokio-test = "0.4.2"
-crossbeam-queue = "0.3.7"
 # Read more on QUIC at https://http3-explained.haxx.se/
 quinn = "0.9.1"
 networking-macros = { path = "../networking-macros" }
