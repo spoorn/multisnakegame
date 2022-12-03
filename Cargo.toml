@@ -21,6 +21,9 @@ iyes_loopless = "0.8.0"
 rand = "0.8.5"
 tokio = { version = "1.21.2", features = ["full"] }
 networking = { path = "networking" }
+futures = "0.3.25"
+futures-lite = "1.12.0"
+#smol = "1.3.0"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

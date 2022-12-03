@@ -48,7 +48,7 @@ pub struct SendError {
 pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
-    recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send>>,
+    recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     recv_streams: HashMap<u32, RecvStream>,
     send_streams: HashMap<u32, SendStream>,
     rx: HashMap<TypeId, Receiver<Bytes>>,

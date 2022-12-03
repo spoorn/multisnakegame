@@ -10,9 +10,8 @@ mod ui;
 mod client;
 mod server;
 
-
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Client test
     App::new()
         .insert_resource(WindowDescriptor {
             title: "Snake!".to_string(),
@@ -28,5 +27,7 @@ async fn main() {
         .add_plugin(common::CommonPlugin)
         .add_plugin(food::FoodPlugin)
         .add_plugin(snake::SnakePlugin)
+        .add_plugin(client::client::ClientPlugin)
+        .add_plugin(server::server::ServerPlugin)
         .run();
 }
