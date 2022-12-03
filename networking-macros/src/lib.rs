@@ -27,7 +27,7 @@ pub fn bin_packet(tokens: TokenStream) -> TokenStream {
         }
         
         #[derive(Copy, Clone)]
-        struct #packet_builder_name;
+        pub struct #packet_builder_name;
         impl networking::packet::PacketBuilder<#name> for #packet_builder_name {
         
             fn read(&self, bytes: bytes::Bytes) -> Result<#name, Box<dyn std::error::Error>> {

@@ -1,7 +1,8 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use quinn::{ClientConfig, Endpoint, ServerConfig};
+use std::time::Duration;
+use quinn::{ClientConfig, Endpoint, IdleTimeout, ServerConfig, TransportConfig, VarInt};
 
 // Implementation of `ServerCertVerifier` that verifies everything as trustworthy.
 struct SkipServerVerification;
@@ -72,8 +73,13 @@ fn configure_client(server_certs: &[&[u8]]) -> Result<ClientConfig, Box<dyn Erro
         .with_safe_defaults()
         .with_custom_certificate_verifier(SkipServerVerification::new())
         .with_no_client_auth();
+    let mut client_config = ClientConfig::new(Arc::new(crypto));
+    let mut transport_config = TransportConfig::default();
+    transport_config.keep_alive_interval(Some(Duration::from_secs(60)));
+    transport_config.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(60_000))));
+    client_config.transport_config(Arc::new(transport_config));
 
-    Ok(ClientConfig::new(Arc::new(crypto)))
+    Ok(client_config)
 }
 
 /// Returns default server configuration along with its certificate.
@@ -86,7 +92,9 @@ fn configure_server() -> Result<(ServerConfig, Vec<u8>), Box<dyn Error>> {
 
     let mut server_config = ServerConfig::with_single_cert(cert_chain, priv_key)?;
     Arc::get_mut(&mut server_config.transport)
-        .unwrap();
+        .unwrap()
+        .keep_alive_interval(Some(Duration::from_secs(60)))
+        .max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(60_000))));
 
     Ok((server_config, cert_der))
 }

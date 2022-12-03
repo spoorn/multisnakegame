@@ -1,16 +1,20 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
 use std::fmt::Debug;
+use std::time::Duration;
 
 use bimap::BiMap;
 use bytes::Bytes;
 use derive_more::Display;
 use hashbrown::HashMap;
-use quinn::{Connection, RecvStream, SendStream};
+use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::runtime::{Handle, TryCurrentError};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 use networking_macros::ErrorMessageNew;
 
@@ -45,13 +49,16 @@ pub struct SendError {
     message: String
 }
 
+#[derive(Debug)]
 pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     recv_streams: HashMap<u32, RecvStream>,
     send_streams: HashMap<u32, SendStream>,
-    rx: HashMap<TypeId, Receiver<Bytes>>,
+    rx: HashMap<TypeId, (Receiver<Bytes>, JoinHandle<()>)>,
+    client_connection: Option<(Endpoint, Connection)>,
+    server_connection: Option<(Endpoint, Connection)>,
     next_receive_id: u32,
     next_send_id: u32
 }
@@ -66,6 +73,8 @@ impl PacketManager {
             recv_streams: HashMap::new(),
             send_streams: HashMap::new(),
             rx: HashMap::new(),
+            client_connection: None,
+            server_connection: None,
             next_receive_id: 0,
             next_send_id: 0
         }
@@ -79,10 +88,12 @@ impl PacketManager {
         // TODO: assert num streams equals registered
         let server_addr = server_addr.into().parse().unwrap();
         
+        let endpoint: Endpoint;
         let conn: Connection;
         
         if is_server {
-            let (endpoint, server_cert) = make_server_endpoint(server_addr)?;
+            let (e, server_cert) = make_server_endpoint(server_addr)?;
+            endpoint = e;
 
             // Single connection
             let incoming_conn = endpoint.accept().await.unwrap();
@@ -90,7 +101,7 @@ impl PacketManager {
             println!("[server] connection accepted: addr={}", conn.remote_address());
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
-            let endpoint = make_client_endpoint(client_addr.unwrap().into().parse().unwrap(), &[])?;
+            endpoint = make_client_endpoint(client_addr.unwrap().into().parse().unwrap(), &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
             conn = endpoint.connect(server_addr, "localhost")?.await?;
@@ -126,6 +137,12 @@ impl PacketManager {
             // TODO: Assert receivers exists
         }
         
+        if is_server {
+            self.server_connection = Some((endpoint, conn));
+        } else {
+            self.client_connection = Some((endpoint, conn));
+        }
+        
         Ok(())
     }
     
@@ -143,13 +160,15 @@ impl PacketManager {
                 let (tx, rx) = mpsc::channel(100);
 
                 // TODO: Add receive_thread to rx for validations
-                self.rx.insert(packet_type_id, rx);
-                let receive_thread = tokio::spawn(async move {
+                let receive_thread: JoinHandle<()> = tokio::spawn(async move {
                     let mut partial_chunk: Option<Bytes> = None;
                     loop {
+                        println!("### RECEIVE THREAD {}", tx.is_closed());
+                        
                         // TODO: relay error message
                         // TODO: configurable size limit
                         let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
+                        println!("### ANY");
                         match chunk {
                             None => {
                                 // TODO: Error
@@ -184,7 +203,7 @@ impl PacketManager {
                                     }
                                     offset = i + FRAME_BOUNDARY.len();
                                 }
-
+                        
                                 if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
                                     let prefix_part = bytes.slice(offset..bytes.len());
                                     match partial_chunk.take() {
@@ -200,6 +219,8 @@ impl PacketManager {
                         }
                     }
                 });
+
+                self.rx.insert(packet_type_id, (rx, receive_thread));
 
                 self.next_receive_id += 1;
                 Ok(())
@@ -217,9 +238,11 @@ impl PacketManager {
     pub async fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
         self.validate_packet_was_registered::<T>(false)?;
         let packet_type_id = TypeId::of::<T>();
-        let rx = self.rx.get_mut(&packet_type_id).unwrap();
+        let (rx, _receive_thread) = self.rx.get_mut(&packet_type_id).unwrap();
         let mut res: Vec<T> = Vec::new();
         let packet_builder: &U = self.recv_packet_builders.get(&TypeId::of::<T>()).unwrap().downcast_ref::<U>().unwrap();
+        
+        println!("### RECEIVED {:?}", rx);
 
         // If blocking, wait for the first packet
         if blocking {
@@ -248,6 +271,9 @@ impl PacketManager {
             }
         }
 
+        if res.is_empty() {
+            return Ok(None);
+        }
         Ok(Some(res))
     }
     

@@ -9,6 +9,7 @@ mod ui;
 // Test
 mod client;
 mod server;
+mod networking;
 
 fn main() {
     // Client test
