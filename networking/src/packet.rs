@@ -126,6 +126,7 @@ impl PacketManager {
         }
     }
 
+    // TODO: validate number of streams when registering packets
     pub async fn async_init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, mut client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using the async_*() methods, make sure you create the PacketManager using new_async(), not new()");
@@ -159,7 +160,7 @@ impl PacketManager {
             endpoint = make_client_endpoint(client_addr.parse().unwrap(), &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
-            conn = endpoint.connect(server_addr, "localhost")?.await?;
+            conn = endpoint.connect(server_addr, "hostname")?.await?;
             println!("[client] connected: addr={}", conn.remote_address());
         }
 

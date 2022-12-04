@@ -1,11 +1,14 @@
+use bevy::app::AppExit;
 use bevy::prelude::*;
-use iyes_loopless::prelude::ConditionSet;
+use bevy::window::{WindowClosed, WindowCloseRequested};
+use iyes_loopless::prelude::{ConditionSet, IntoConditionalSystem};
 
 use crate::client::client::ClientPacketManager;
 use crate::common::components::Position;
 use crate::food::components::Food;
 use crate::food::resources::FoodId;
 use crate::food::spawn_food;
+use crate::networking::client_packets::Disconnect;
 use crate::networking::server_packets::{SnakePositions, SnakePositionsPacketBuilder, SpawnFood, SpawnFoodPacketBuilder};
 use crate::snake::components::SnakeHead;
 use crate::state::GameState;
@@ -22,7 +25,8 @@ impl Plugin for ClientHandlePlugin {
                                          .run_in_state(GameState::Running)
                                          .with_system(client_handle_packets)
                                          .into()
-                                     );
+                                     )
+            .add_system(exit_system.run_not_in_state(GameState::MainMenu));
     }
 }
 
@@ -46,9 +50,15 @@ fn client_handle_packets(mut manager: ResMut<ClientPacketManager>,
         Some(sf) => {
             if !sf.is_empty() {
                 for food in sf.iter() {
-                    spawn_food(&mut commands, food_id.id, None, food.position.0, food.position.1);
+                    spawn_food(&mut commands, food_id.as_mut(), None, food.position.0, food.position.1);
                 }
             }
         }
+    }
+}
+
+fn exit_system(mut manager: ResMut<ClientPacketManager>, mut exit: EventReader<AppExit>, mut close_window: EventReader<WindowCloseRequested>) {
+    if !exit.is_empty() || !close_window.is_empty() {
+        manager.manager.send(Disconnect).unwrap();
     }
 }

@@ -1,11 +1,12 @@
+use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy::utils::HashMap;
 use iyes_loopless::prelude::{AppLooplessStateExt, ConditionSet, IntoConditionalSystem};
 use iyes_loopless::state::NextState;
+
 use crate::common::components::Position;
 use crate::food::components::Food;
-use crate::networking::client_packets::{StartNewGame, StartNewGamePacketBuilder};
-use crate::networking::server_packets::{SnakePositions, StartNewGameAck};
+use crate::networking::client_packets::{Disconnect, DisconnectPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
+use crate::networking::server_packets::StartNewGameAck;
 use crate::server::server::ServerPacketManager;
 use crate::snake::components::SnakeHead;
 use crate::state::GameState;
@@ -22,7 +23,8 @@ impl Plugin for ServerHandlePlugin {
                                      ConditionSet::new()
                                          .run_in_state(GameState::Running)
                                          .with_system(server_handle_packets)
-                                         .into());
+                                         .into())
+            .add_system(client_disconnect.run_not_in_state(GameState::MainMenu));
     }
 }
 
@@ -52,4 +54,12 @@ fn server_handle_packets(mut manager: ResMut<ServerPacketManager>,
 
     // let snake_pos_packet = SnakePositions { head_positions: snake_positions };
     // manager.send(snake_pos_packet).unwrap();
+}
+
+fn client_disconnect(mut manager: ResMut<ServerPacketManager>, mut exit: EventWriter<AppExit>) {
+    let disconnects = manager.manager.received::<Disconnect, DisconnectPacketBuilder>(false).unwrap();
+    // TODO: Check all clients
+    if disconnects.is_some() && disconnects.unwrap().len() > 0 {
+        exit.send(AppExit);
+    }
 }

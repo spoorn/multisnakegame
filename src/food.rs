@@ -42,7 +42,7 @@ fn setup_food(mut commands: Commands) {
     commands.insert_resource::<FoodId>(FoodId { id: 0 });
 }
 
-pub fn spawn_food(mut commands: &mut Commands, food_id: u32, manager: Option<&mut PacketManager>, x: i32, y: i32) {
+pub fn spawn_food(mut commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, x: i32, y: i32) {
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
@@ -51,9 +51,10 @@ pub fn spawn_food(mut commands: &mut Commands, food_id: u32, manager: Option<&mu
             },
             ..default()
         })
-        .insert(Food { id: food_id })
+        .insert(Food { id: food_id.id })
         .insert(Position { x, y })
         .insert(Size::square(0.8));
+    food_id.id += 1;
     if let Some(manager) = manager {
         manager.send(SpawnFood { position: (x, y) }).unwrap();
     }
@@ -62,7 +63,7 @@ pub fn spawn_food(mut commands: &mut Commands, food_id: u32, manager: Option<&mu
 fn auto_spawn_food(mut commands: Commands, mut food_id: ResMut<FoodId>, mut manager: ResMut<ServerPacketManager>) {
     let x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
     let y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
-    spawn_food(&mut commands, food_id.id, Some(&mut manager.manager), x, y);
+    spawn_food(&mut commands, food_id.as_mut(), Some(&mut manager.manager), x, y);
     food_id.id += 1;
 }
 

@@ -1,5 +1,11 @@
+// Don't open console window in release mode
+//#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::env;
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
+use bevy::winit::{UpdateMode, WinitSettings};
+use bevy_embedded_assets::EmbeddedAssetPlugin;
 
 mod common;
 mod food;
@@ -12,13 +18,30 @@ mod client;
 mod server;
 mod networking;
 
+fn hide_console_window() {
+    use std::ptr;
+    use winapi::um::wincon::GetConsoleWindow;
+    use winapi::um::winuser::{ShowWindow, SW_HIDE};
+
+    let window = unsafe {GetConsoleWindow()};
+    // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow
+    if window != ptr::null_mut() {
+        unsafe {
+            ShowWindow(window, SW_HIDE);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let client_or_server = &args[1];
-    let server_addr = args[2].to_owned();
-    let client_addr = if args.len() >= 4 { args[3].to_owned() } else { "None".to_string() };
+    let server_addr = args[2].to_owned();;
+    //let server_addr = "192.168.1.243:5000".to_string();
+    //let client_addr = "0.0.0.0:5001".to_string();//if args.len() >= 4 { args[3].to_owned() } else { "None".to_string() };
+    let client_addr = if args.len() >= 4 { args[3].to_owned() } else { "0.0.0.0:5001".to_string() };
     
     if client_or_server == "client" {
+        hide_console_window();
         // Client test
         App::new()
             .insert_resource(WindowDescriptor {
@@ -30,7 +53,9 @@ fn main() {
                 ..default()
             })
             .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
-            .add_plugins(DefaultPlugins)
+            .add_plugins_with(DefaultPlugins, |group| {
+                group.add_before::<bevy::asset::AssetPlugin, _>(EmbeddedAssetPlugin)
+            })
             .add_plugin(ui::UiPlugin)
             .add_plugin(common::CommonPlugin)
             .add_plugin(food::FoodPlugin { is_client: true })
@@ -39,14 +64,26 @@ fn main() {
             .add_plugin(client::client_handle::ClientHandlePlugin)
             .run();
     } else {
-        // Server test
-        App::new()
-            .add_plugins(DefaultPlugins)
-            .add_plugin(server::server::ServerPlugin { server_addr })
-            .add_plugin(server::server_handle::ServerHandlePlugin)
-            .add_plugin(common::CommonPlugin)
-            .add_plugin(food::FoodPlugin { is_client: false })
-            .add_plugin(snake::SnakePlugin)
-            .run();
+        let mut first = true;
+        loop {
+            // Server test
+            App::new()
+                // LogPlugin should only be globally initialized for all Apps: https://docs.rs/bevy_log/0.8.1/bevy_log/struct.LogPlugin.html
+                .add_plugins_with(DefaultPlugins, |group| {
+                    if first { group } else { group.disable::<LogPlugin>() }
+                })
+                .insert_resource(WinitSettings {
+                    return_from_run: true,
+                    focused_mode: UpdateMode::Continuous,
+                    unfocused_mode: UpdateMode::Continuous
+                })
+                .add_plugin(server::server::ServerPlugin { server_addr: server_addr.clone() })
+                .add_plugin(server::server_handle::ServerHandlePlugin)
+                .add_plugin(common::CommonPlugin)
+                .add_plugin(food::FoodPlugin { is_client: false })
+                .add_plugin(snake::SnakePlugin)
+                .run();   
+            first = false;
+        }
     }
 }
