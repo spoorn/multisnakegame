@@ -1,7 +1,6 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
 use std::fmt::Debug;
-use std::time::Duration;
 
 use bimap::BiMap;
 use bytes::Bytes;
@@ -9,12 +8,11 @@ use derive_more::Display;
 use hashbrown::HashMap;
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::runtime::{Handle, TryCurrentError};
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
 
 use networking_macros::ErrorMessageNew;
 
@@ -49,6 +47,7 @@ pub struct SendError {
     message: String
 }
 
+// TODO: Document that same runtime must be used for a PacketManager instance due to channels
 #[derive(Debug)]
 pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
@@ -57,15 +56,47 @@ pub struct PacketManager {
     recv_streams: HashMap<u32, RecvStream>,
     send_streams: HashMap<u32, SendStream>,
     rx: HashMap<TypeId, (Receiver<Bytes>, JoinHandle<()>)>,
+    // Endpoint and Connection structs moved to the struct fields to prevent closing connections
+    // by dropping.
     client_connection: Option<(Endpoint, Connection)>,
     server_connection: Option<(Endpoint, Connection)>,
     next_receive_id: u32,
-    next_send_id: u32
+    next_send_id: u32,
+    // We construct a single Tokio Runtime to be used by each PacketManger instance, so that
+    // methods can be synchronous.  There is also an async version of each API if the user wants
+    // to use their own runtime.
+    runtime: Option<Runtime>
 }
 
 impl PacketManager {
     
     pub fn new() -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build();
+        match runtime {
+            Ok(runtime) => {
+                PacketManager {
+                    receive_packets: BiMap::new(),
+                    send_packets: BiMap::new(),
+                    recv_packet_builders: HashMap::new(),
+                    recv_streams: HashMap::new(),
+                    send_streams: HashMap::new(),
+                    rx: HashMap::new(),
+                    client_connection: None,
+                    server_connection: None,
+                    next_receive_id: 0,
+                    next_send_id: 0,
+                    runtime: Some(runtime)
+                }
+            }
+            Err(e) => {
+                panic!("Could not create a Tokio runtime for PacketManager.  If you are calling new() from code that already has an async runtime available, use PacketManager.new_async(), and respective async_*() versions of APIs.  --  {}", e);
+            }
+        }
+    }
+    
+    pub fn new_for_async() -> Self {
         PacketManager {
             receive_packets: BiMap::new(),
             send_packets: BiMap::new(),
@@ -76,11 +107,29 @@ impl PacketManager {
             client_connection: None,
             server_connection: None,
             next_receive_id: 0,
-            next_send_id: 0
+            next_send_id: 0,
+            runtime: None
         }
     }
 
-    pub async fn init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
+    pub fn init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
+        match self.runtime.take() {
+            None => {
+                panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_init_connection()?");
+            }
+            Some(runtime) => {
+                // TODO: this isn't so great, we can refactor to create static methods that don't require mutable ref to self, and use those instead later on
+                let res = runtime.block_on(self.async_init_connection(is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr));
+                let _ = self.runtime.insert(runtime);
+                res
+            }
+        }
+    }
+
+    pub async fn async_init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
+        if self.runtime.is_some() {
+            panic!("PacketManager has a runtime instance associated with it.  If you are using the async_*() methods, make sure you create the PacketManager using new_async(), not new()");
+        }
         // if expected_num_accepts_uni != self.next_receive_id {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
         // }
@@ -160,15 +209,12 @@ impl PacketManager {
                 let (tx, rx) = mpsc::channel(100);
 
                 // TODO: Add receive_thread to rx for validations
-                let receive_thread: JoinHandle<()> = tokio::spawn(async move {
+                let task = async move {
                     let mut partial_chunk: Option<Bytes> = None;
                     loop {
-                        println!("### RECEIVE THREAD {}", tx.is_closed());
-                        
                         // TODO: relay error message
                         // TODO: configurable size limit
                         let chunk = recv_stream.read_chunk(usize::MAX, true).await.unwrap();
-                        println!("### ANY");
                         match chunk {
                             None => {
                                 // TODO: Error
@@ -203,7 +249,7 @@ impl PacketManager {
                                     }
                                     offset = i + FRAME_BOUNDARY.len();
                                 }
-                        
+
                                 if boundaries.is_empty() || (offset + FRAME_BOUNDARY.len() != bytes.len() - 1) {
                                     let prefix_part = bytes.slice(offset..bytes.len());
                                     match partial_chunk.take() {
@@ -218,7 +264,16 @@ impl PacketManager {
                             }
                         }
                     }
-                });
+                };
+
+                let receive_thread: JoinHandle<()> = match self.runtime.as_ref() {
+                    None => {
+                        tokio::spawn(task)
+                    }
+                    Some(runtime) => {
+                        runtime.spawn(task)
+                    }
+                };
 
                 self.rx.insert(packet_type_id, (rx, receive_thread));
 
@@ -234,16 +289,31 @@ impl PacketManager {
         self.next_send_id += 1;
         Ok(())
     }
+
+    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+        match self.runtime.take() {
+            None => {
+                panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
+            }
+            Some(runtime) => {
+                let res = runtime.block_on(self.async_received::<T, U>(blocking));
+                let _ = self.runtime.insert(runtime);
+                res
+            }
+        }
+    }
     
-    pub async fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+    pub async fn async_received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+        if self.runtime.is_some() {
+            panic!("PacketManager has a runtime instance associated with it.  If you are using the async_*() methods, make sure you create the PacketManager using new_async(), not new()");
+        }
+        
         self.validate_packet_was_registered::<T>(false)?;
         let packet_type_id = TypeId::of::<T>();
         let (rx, _receive_thread) = self.rx.get_mut(&packet_type_id).unwrap();
         let mut res: Vec<T> = Vec::new();
         let packet_builder: &U = self.recv_packet_builders.get(&TypeId::of::<T>()).unwrap().downcast_ref::<U>().unwrap();
         
-        println!("### RECEIVED {:?}", rx);
-
         // If blocking, wait for the first packet
         if blocking {
             match rx.recv().await {
@@ -276,8 +346,25 @@ impl PacketManager {
         }
         Ok(Some(res))
     }
+
+    pub fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+        match self.runtime.take() {
+            None => {
+                panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
+            }
+            Some(runtime) => {
+                let res = runtime.block_on(self.async_send(packet));
+                let _ = self.runtime.insert(runtime);
+                res
+            }
+        }
+    }
     
-    pub async fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+    pub async fn async_send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+        if self.runtime.is_some() {
+            panic!("PacketManager has a runtime instance associated with it.  If you are using the async_*() methods, make sure you create the PacketManager using new_async(), not new()");
+        }
+        
         let bytes = packet.to_bytes();
         let packet_type_id = TypeId::of::<T>();
         let id = self.send_packets.get_by_right(&packet_type_id).unwrap();
@@ -341,9 +428,10 @@ mod tests {
         id: i32
     }
 
+    // TODO: Test sync versions
     #[tokio::test]
-    async fn receive_packet_e2e() {
-        let mut manager = PacketManager::new();
+    async fn receive_packet_e2e_async() {
+        let mut manager = PacketManager::new_for_async();
         
         let (tx, mut rx) = mpsc::channel(100);
         let server_addr = "127.0.0.1:5000";
@@ -351,25 +439,25 @@ mod tests {
         
         // Server
         let server = tokio::spawn(async move {
-            let mut m = PacketManager::new();
-            assert!(m.init_connection(true, 2, 2, server_addr, None).await.is_ok());
+            let mut m = PacketManager::new_for_async();
+            assert!(m.async_init_connection(true, 2, 2, server_addr, None).await.is_ok());
             assert!(m.register_send_packet::<Test>().is_ok());
             assert!(m.register_send_packet::<Other>().is_ok());
             assert!(m.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
             assert!(m.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
             
             for _ in 0..100 {
-                assert!(m.send::<Test>(Test { id: 5 }).await.is_ok());
-                assert!(m.send::<Test>(Test { id: 8 }).await.is_ok());
-                assert!(m.send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
-                assert!(m.send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
+                assert!(m.async_send::<Test>(Test { id: 5 }).await.is_ok());
+                assert!(m.async_send::<Test>(Test { id: 8 }).await.is_ok());
+                assert!(m.async_send::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
+                assert!(m.async_send::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
                 
-                let test_res = m.received::<Test, TestPacketBuilder>(true).await;
+                let test_res = m.async_received::<Test, TestPacketBuilder>(true).await;
                 assert!(test_res.is_ok());
                 let unwrapped = test_res.unwrap();
                 assert!(unwrapped.is_some());
                 assert_eq!(unwrapped.unwrap(), vec![Test { id: 6 }, Test { id: 9 }]);
-                let other_res = m.received::<Other, OtherPacketBuilder>(true).await;
+                let other_res = m.async_received::<Other, OtherPacketBuilder>(true).await;
                 assert!(other_res.is_ok());
                 let unwrapped = other_res.unwrap();
                 assert!(unwrapped.is_some());
@@ -385,7 +473,7 @@ mod tests {
         });
         
         // Client
-        let client = manager.init_connection(false, 2, 2, server_addr, Some(client_addr)).await;
+        let client = manager.async_init_connection(false, 2, 2, server_addr, Some(client_addr)).await;
         println!("{:#?}", client);
         
         assert!(client.is_ok());
@@ -396,17 +484,17 @@ mod tests {
         
         for _ in 0..100 {
             // Send packets
-            assert!(manager.send::<Test>(Test { id: 6 }).await.is_ok());
-            assert!(manager.send::<Test>(Test { id: 9 }).await.is_ok());
-            assert!(manager.send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
-            assert!(manager.send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+            assert!(manager.async_send::<Test>(Test { id: 6 }).await.is_ok());
+            assert!(manager.async_send::<Test>(Test { id: 9 }).await.is_ok());
+            assert!(manager.async_send::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
+            assert!(manager.async_send::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
             
-            let test_res = manager.received::<Test, TestPacketBuilder>(true).await;
+            let test_res = manager.async_received::<Test, TestPacketBuilder>(true).await;
             assert!(test_res.is_ok());
             let unwrapped = test_res.unwrap();
             assert!(unwrapped.is_some());
             assert_eq!(unwrapped.unwrap(), vec![Test { id: 5 }, Test { id: 8 }]);
-            let other_res = manager.received::<Other, OtherPacketBuilder>(true).await;
+            let other_res = manager.async_received::<Other, OtherPacketBuilder>(true).await;
             assert!(other_res.is_ok());
             let unwrapped = other_res.unwrap();
             assert!(unwrapped.is_some());
