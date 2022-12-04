@@ -1,15 +1,14 @@
 use networking_macros::bincode_packet;
 
 #[bincode_packet]
-#[derive(Debug)]
-pub struct PositionPacket {
-    pub id: u32
+pub struct StartNewGameAck;
+
+#[bincode_packet]
+pub struct SpawnFood {
+    pub position: (i32, i32)
 }
 
 #[bincode_packet]
-#[derive(Debug)]
-pub struct FoodPacket {
-    pub name: String,
-    pub item: String,
-    pub id: u32
+pub struct SnakePositions {
+    pub head_positions: Vec<(i32, i32)>
 }

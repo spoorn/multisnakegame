@@ -2,6 +2,7 @@
 pub enum GameState {
     MainMenu,
     Paused,
+    ConnectToServer,
     PreGame,
     Running,
 }

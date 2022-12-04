@@ -97,7 +97,7 @@ pub fn menu_action(
     for (interaction, menu_button_action) in &interaction_query {
         if *interaction == Interaction::Clicked {
             match menu_button_action {
-                MenuButtonAction::NewGame => commands.insert_resource(NextState(GameState::PreGame)),
+                MenuButtonAction::NewGame => commands.insert_resource(NextState(GameState::ConnectToServer)),
                 MenuButtonAction::BackToMainMenu => commands.insert_resource(NextState(GameState::MainMenu)),
                 MenuButtonAction::Quit => app_exit_events.send(AppExit),
             }

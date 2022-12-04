@@ -1,6 +1,6 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 use bimap::BiMap;
 use bytes::Bytes;
@@ -209,12 +209,13 @@ impl PacketManager {
         
         match self.recv_streams.remove(&self.next_receive_id) {
             None => {
-                return Err(ReceiveError::new(format!("recv stream does not exist for packet type={}, id={}.  Did you forget to call init_connection() on your PacketManager?", type_name::<T>(), self.next_receive_id)));
+                return Err(ReceiveError::new(format!("recv stream does not exist for packet id={}, type={}.  Did you forget to call init_connection() on your PacketManager?", self.next_receive_id, type_name::<T>())));
             }
             Some(mut recv_stream) => {
                 let (tx, rx) = mpsc::channel(100);
 
                 // TODO: Add receive_thread to rx for validations
+                let id = self.next_receive_id;
                 let task = async move {
                     let mut partial_chunk: Option<Bytes> = None;
                     loop {
@@ -224,9 +225,11 @@ impl PacketManager {
                         match chunk {
                             None => {
                                 // TODO: Error
+                                println!("Receive stream closed, got None when reading chunks");
                                 break;
                             }
                             Some(chunk) => {
+                                println!("Received chunked packets for id={}, type={}, length={}", id, type_name::<T>(), chunk.bytes.len());
                                 let bytes;
                                 match partial_chunk.take() {
                                     None => {
@@ -236,6 +239,9 @@ impl PacketManager {
                                         bytes = Bytes::from([part, chunk.bytes].concat());
                                     }
                                 }
+
+                                // TODO: Make trace log
+                                println!("Received bytes: {:?}", bytes);
                                 let boundaries: Vec<usize> = bytes.windows(FRAME_BOUNDARY.len()).enumerate().filter(|(_, w)| matches!(*w, FRAME_BOUNDARY)).map(|(i, _)| i).collect();
                                 let mut offset = 0;
                                 for i in boundaries.iter() {
@@ -246,11 +252,21 @@ impl PacketManager {
                                     let frame = bytes.slice(offset..*i);
                                     match partial_chunk.take() {
                                         None => {
-                                            tx.send(frame).await.unwrap();
+                                            if matches!(frame.as_ref(), FRAME_BOUNDARY) {
+                                                println!("Found a dangling FRAME_BOUNDARY in packet frame.  This most likely is a bug in the networking library!")
+                                            } else {
+                                                println!("Sending length {}", frame.len());
+                                                tx.send(frame).await.unwrap();
+                                            }
                                         },
                                         Some(part) => {
                                             let reconstructed_frame = Bytes::from([part, frame].concat());
-                                            tx.send(reconstructed_frame).await.unwrap();
+                                            if matches!(reconstructed_frame.as_ref(), FRAME_BOUNDARY) {
+                                                println!("Found a dangling FRAME_BOUNDARY in packet frame.  This most likely is a bug in the networking library!")
+                                            } else {
+                                                println!("Sending reconstructed length {}", reconstructed_frame.len());
+                                                tx.send(reconstructed_frame).await.unwrap();
+                                            }
                                         }
                                     }
                                     offset = i + FRAME_BOUNDARY.len();
@@ -283,6 +299,8 @@ impl PacketManager {
 
                 self.rx.insert(packet_type_id, (rx, receive_thread));
 
+                // TODO: add packet builder to debug log
+                println!("Registered Receive packet with id={}, type={}", self.next_receive_id, type_name::<T>());
                 self.next_receive_id += 1;
                 Ok(())
             }
@@ -292,6 +310,7 @@ impl PacketManager {
     pub fn register_send_packet<T: Packet + 'static>(&mut self) -> Result<(), ReceiveError> {
         self.validate_packet_is_new::<T>(true)?;
         self.send_packets.insert(self.next_send_id, TypeId::of::<T>());
+        println!("Registered Send packet with id={}, type={}", self.next_send_id, type_name::<T>());
         self.next_send_id += 1;
         Ok(())
     }
@@ -375,8 +394,11 @@ impl PacketManager {
         let packet_type_id = TypeId::of::<T>();
         let id = self.send_packets.get_by_right(&packet_type_id).unwrap();
         let send_stream = self.send_streams.get_mut(id).unwrap();
+        // TODO: Make trace log
+        println!("Sending bytes: {:?}", bytes);
         send_stream.write_chunk(bytes).await.unwrap();
         send_stream.write_all(FRAME_BOUNDARY).await.unwrap();
+        println!("Sent packet with id={}, type={}", id, type_name::<T>());
         Ok(())
     }
     
@@ -403,7 +425,7 @@ impl PacketManager {
     #[inline]
     fn receive_bytes<T: Packet + 'static, U: PacketBuilder<T> + 'static>(bytes: Bytes, packet_builder: &U, res: &mut Vec<T>) -> Result<(), ReceiveError> {
         if bytes.is_empty() {
-            return Err(ReceiveError::new("Received empty bytes!"));
+            return Err(ReceiveError::new(format!("Received empty bytes for packet type={}!", type_name::<T>())));
         }
         println!("Received packet #{} for type {}", res.len(), type_name::<T>());
         let packet = packet_builder.read(bytes).unwrap();

@@ -1,9 +1,12 @@
 use bevy::prelude::*;
+use iyes_loopless::prelude::AppLooplessStateExt;
+use iyes_loopless::state::NextState;
 
 use networking::packet::PacketManager;
 
-use crate::networking::client_packets::{OtherPacket, TestPacket};
-use crate::networking::server_packets::{FoodPacket, FoodPacketPacketBuilder, PositionPacket, PositionPacketPacketBuilder};
+use crate::networking::client_packets::StartNewGame;
+use crate::networking::server_packets::{SnakePositions, SnakePositionsPacketBuilder, SpawnFood, SpawnFoodPacketBuilder, StartNewGameAck, StartNewGameAckPacketBuilder};
+use crate::state::GameState;
 
 pub struct ClientPlugin {
     pub client_addr: String,
@@ -13,32 +16,27 @@ pub struct ClientPlugin {
 impl Plugin for ClientPlugin {
     
     fn build(&self, app: &mut App) {
-        app.add_startup_system(setup_packet_manager)
-            .add_system(test_client_packets);
+        app
+            .add_enter_system(GameState::ConnectToServer, send_start_game_packet);
     }
 }
 
-struct ClientPacketManager {
-    manager: PacketManager
+pub struct ClientPacketManager {
+    pub manager: PacketManager
 }
 
-fn test_client_packets(mut manager: ResMut<ClientPacketManager>) {
-    let manager = &mut manager.manager;
-    manager.send(TestPacket { id: 2 }).unwrap();
-    manager.send(OtherPacket { name: "spoorn".to_string(), id: 2 }).unwrap();
-
-    let pos_packets = manager.received::<PositionPacket, PositionPacketPacketBuilder>(false);
-    println!("[client] got packet {:?}", pos_packets);
-    let food_packets = manager.received::<FoodPacket, FoodPacketPacketBuilder>(false);
-    println!("[client] got packet {:?}", food_packets);
-}
-
-fn setup_packet_manager(mut commands: Commands) {
+fn send_start_game_packet(mut commands: Commands) {
     let mut manager = PacketManager::new();
-    manager.init_connection(false, 2, 2, "127.0.0.1:5000", Some("127.0.0.1:5001")).unwrap();
-    manager.register_receive_packet::<PositionPacket>(PositionPacketPacketBuilder).unwrap();
-    manager.register_receive_packet::<FoodPacket>(FoodPacketPacketBuilder).unwrap();
-    manager.register_send_packet::<TestPacket>().unwrap();
-    manager.register_send_packet::<OtherPacket>().unwrap();
+    manager.init_connection(false, 3, 1, "127.0.0.1:5000", Some("127.0.0.1:5001")).unwrap();
+    manager.register_receive_packet::<StartNewGameAck>(StartNewGameAckPacketBuilder).unwrap();
+    manager.register_receive_packet::<SnakePositions>(SnakePositionsPacketBuilder).unwrap();
+    manager.register_receive_packet::<SpawnFood>(SpawnFoodPacketBuilder).unwrap();
+    manager.register_send_packet::<StartNewGame>().unwrap();
+    
+    manager.send(StartNewGame).unwrap();
+
+    // wait for ack
+    manager.received::<StartNewGameAck, StartNewGameAckPacketBuilder>(true).unwrap();
     commands.insert_resource(ClientPacketManager { manager });
+    commands.insert_resource(NextState(GameState::PreGame));
 }

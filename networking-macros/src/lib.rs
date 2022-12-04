@@ -6,11 +6,30 @@ use syn::{Data, DataStruct, Fields, parse_macro_input, DeriveInput};
 #[proc_macro_attribute]
 pub fn bincode_packet(_attr: TokenStream, tokens: TokenStream) -> TokenStream {
     let input = parse_macro_input!(tokens as DeriveInput);
-    
-    return quote! {
-        #[derive(serde::Serialize, serde::Deserialize, networking_macros::BinPacket)]
-        #input
-    }.into();
+
+    match &input.data {
+        Data::Struct(data_struct) => {
+            match &data_struct.fields {
+                Fields::Named(fields) => {
+                    if fields.named.is_empty() {
+                        panic!("Struct annotated with #[bincode_packet] and has named fields cannot have empty number of fields")
+                    }
+                    return quote! {
+                        #[derive(serde::Serialize, serde::Deserialize, networking_macros::BinPacket)]
+                        #input
+                    }.into()
+                },
+                Fields::Unit => {
+                    return quote! {
+                        #[derive(networking_macros::UnitPacket)]
+                        #input
+                    }.into()
+                },
+                _ => panic!("Only Structs with Named fields and Empty Unit structs can be annotated with #[bincode_packet]")
+            }
+        },
+        _ => panic!("Only structs with named fields can be annotated with #[bincode_packet]"),
+    };
 }
 
 #[proc_macro_derive(BinPacket)]
@@ -32,6 +51,31 @@ pub fn bin_packet(tokens: TokenStream) -> TokenStream {
         
             fn read(&self, bytes: bytes::Bytes) -> Result<#name, Box<dyn std::error::Error>> {
                 Ok(bincode::deserialize(bytes.as_ref()).unwrap())
+            }
+        }
+    }.into();
+}
+
+#[proc_macro_derive(UnitPacket)]
+pub fn unit_packet(tokens: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(tokens as DeriveInput);
+    let name = input.ident;
+    let name_str = format!("\"{}\"", name);
+    let packet_builder_name = Ident::new((name.to_string() + "PacketBuilder").as_str(), Span::call_site());
+
+    return quote! {
+        impl networking::packet::Packet for #name {
+            fn to_bytes(self) -> bytes::Bytes {
+                bytes::Bytes::from(#name_str)
+            }
+        }
+        
+        #[derive(Copy, Clone)]
+        pub struct #packet_builder_name;
+        impl networking::packet::PacketBuilder<#name> for #packet_builder_name {
+        
+            fn read(&self, bytes: bytes::Bytes) -> Result<#name, Box<dyn std::error::Error>> {
+                Ok(#name)
             }
         }
     }.into();

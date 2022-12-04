@@ -33,28 +33,20 @@ fn main() {
             .add_plugins(DefaultPlugins)
             .add_plugin(ui::UiPlugin)
             .add_plugin(common::CommonPlugin)
-            .add_plugin(food::FoodPlugin)
+            .add_plugin(food::FoodPlugin { is_client: true })
             .add_plugin(snake::SnakePlugin)
             .add_plugin(client::client::ClientPlugin { client_addr, server_addr })
+            .add_plugin(client::client_handle::ClientHandlePlugin)
             .run();
     } else {
-        // Client test
+        // Server test
         App::new()
-            .insert_resource(WindowDescriptor {
-                title: "Snake!".to_string(),
-                width: 1000.0,
-                height: 1000.0,
-                // TODO: always opens on primary monitor, can't find the Current monitor for some reason
-                position: WindowPosition::Centered(MonitorSelection::Primary),
-                ..default()
-            })
-            .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
             .add_plugins(DefaultPlugins)
-            .add_plugin(ui::UiPlugin)
-            .add_plugin(common::CommonPlugin)
-            .add_plugin(food::FoodPlugin)
-            .add_plugin(snake::SnakePlugin)
             .add_plugin(server::server::ServerPlugin { server_addr })
+            .add_plugin(server::server_handle::ServerHandlePlugin)
+            .add_plugin(common::CommonPlugin)
+            .add_plugin(food::FoodPlugin { is_client: false })
+            .add_plugin(snake::SnakePlugin)
             .run();
     }
 }
