@@ -1,6 +1,6 @@
 use std::any::{Any, type_name, TypeId};
 use std::error::Error;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use bimap::BiMap;
 use bytes::Bytes;
@@ -126,7 +126,7 @@ impl PacketManager {
         }
     }
 
-    pub async fn async_init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
+    pub async fn async_init_connection<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, mut client_addr: Option<S>) -> Result<(), Box<dyn Error>> {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using the async_*() methods, make sure you create the PacketManager using new_async(), not new()");
         }
@@ -134,8 +134,14 @@ impl PacketManager {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
         // }
         
+        let client_addr = match client_addr.take() {
+            None => { "None".to_string() }
+            Some(s) => { s.into() }
+        };
+        let server_addr = server_addr.into();
+        println!("Initiating connection with is_server={}, num_incoming_streams={}, num_outgoing_streams={}, server_addr={}, client_addr={}", is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr);
         // TODO: assert num streams equals registered
-        let server_addr = server_addr.into().parse().unwrap();
+        let server_addr = server_addr.parse().unwrap();
         
         let endpoint: Endpoint;
         let conn: Connection;
@@ -150,7 +156,7 @@ impl PacketManager {
             println!("[server] connection accepted: addr={}", conn.remote_address());
         } else {
             // Bind this endpoint to a UDP socket on the given client address.
-            endpoint = make_client_endpoint(client_addr.unwrap().into().parse().unwrap(), &[])?;
+            endpoint = make_client_endpoint(client_addr.parse().unwrap(), &[])?;
 
             // Connect to the server passing in the server name which is supposed to be in the server certificate.
             conn = endpoint.connect(server_addr, "localhost")?.await?;

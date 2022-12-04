@@ -6,7 +6,9 @@ use networking::packet::PacketManager;
 use crate::networking::client_packets::{OtherPacket, OtherPacketPacketBuilder, TestPacket, TestPacketPacketBuilder};
 use crate::networking::server_packets::{FoodPacket, PositionPacket};
 
-pub struct ServerPlugin;
+pub struct ServerPlugin {
+    pub server_addr: String
+}
 
 impl Plugin for ServerPlugin {
 

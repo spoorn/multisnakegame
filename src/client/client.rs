@@ -5,7 +5,10 @@ use networking::packet::PacketManager;
 use crate::networking::client_packets::{OtherPacket, TestPacket};
 use crate::networking::server_packets::{FoodPacket, FoodPacketPacketBuilder, PositionPacket, PositionPacketPacketBuilder};
 
-pub struct ClientPlugin;
+pub struct ClientPlugin {
+    pub client_addr: String,
+    pub server_addr: String
+}
 
 impl Plugin for ClientPlugin {
     
