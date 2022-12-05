@@ -20,7 +20,7 @@ impl Plugin for CommonPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_startup_system(setup_camera).add_enter_system(GameState::PreGame, pre_game);
-        
+
         if self.is_client {
             app.add_system_set_to_stage(
                 CoreStage::PostUpdate,

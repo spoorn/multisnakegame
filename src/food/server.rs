@@ -4,59 +4,24 @@ use bevy::prelude::*;
 use bevy::utils::HashMap;
 use iyes_loopless::prelude::*;
 use rand::random;
-use networking::packet::PacketManager;
 
 use crate::common::components::Position;
-use crate::common::components::Size;
 use crate::common::constants::{ARENA_HEIGHT, ARENA_WIDTH};
 use crate::food::components::Food;
 use crate::food::resources::FoodId;
-use crate::networking::server_packets::SpawnFood;
+use crate::food::spawn_food;
 use crate::server::server::ServerPacketManager;
 use crate::snake::components::{SnakeHead, SnakeState};
 use crate::snake::spawn_tail;
 use crate::state::GameState;
 
-pub mod components;
-pub mod resources;
+pub struct FoodServerPlugin;
 
-pub struct FoodPlugin {
-    pub is_client: bool
-}
-
-impl Plugin for FoodPlugin {
+impl Plugin for FoodServerPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .add_startup_system(setup_food)
-            .add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement));
-        if !self.is_client {
-            app.add_fixed_timestep(Duration::from_secs(1), "spawn_food")
-                .add_fixed_timestep_system("spawn_food", 0, auto_spawn_food.run_in_state(GameState::Running));
-        }
-    }
-}
-
-const FOOD_COLOR: Color = Color::rgb(1.0, 0.0, 1.0);
-
-fn setup_food(mut commands: Commands) {
-    commands.insert_resource::<FoodId>(FoodId { id: 0 });
-}
-
-pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, x: i32, y: i32) {
-    commands
-        .spawn_bundle(SpriteBundle {
-            sprite: Sprite {
-                color: FOOD_COLOR,
-                ..default()
-            },
-            ..default()
-        })
-        .insert(Food { id: food_id.id })
-        .insert(Position { x, y })
-        .insert(Size::square(0.8));
-    food_id.id += 1;
-    if let Some(manager) = manager {
-        manager.send(SpawnFood { position: (x, y) }).unwrap();
+        app.add_system(eat_food.run_in_state(GameState::Running).after(SnakeState::Movement))
+            .add_fixed_timestep(Duration::from_secs(1), "spawn_food")
+            .add_fixed_timestep_system("spawn_food", 0, auto_spawn_food.run_in_state(GameState::Running));
     }
 }
 

@@ -67,7 +67,8 @@ fn main() {
                     })
                     .add_plugin(server::server::ServerPlugin { server_addr: server_addr.clone() })
                     .add_plugin(common::CommonPlugin { is_client: false })
-                    .add_plugin(food::FoodPlugin { is_client: false })
+                    .add_plugin(food::FoodPlugin)
+                    .add_plugin(food::server::FoodServerPlugin)
                     .add_plugin(snake::SnakePlugin)
                     .run();
                 first = false;
@@ -102,7 +103,7 @@ fn main() {
             })
             .add_plugin(ui::UiPlugin)
             .add_plugin(common::CommonPlugin { is_client: true })
-            .add_plugin(food::FoodPlugin { is_client: true })
+            .add_plugin(food::FoodPlugin)
             .add_plugin(snake::SnakePlugin)
             .add_plugin(client::client::ClientPlugin { client_addr, server_addr: server_addr.clone() })
             .run();

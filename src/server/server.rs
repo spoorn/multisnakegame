@@ -28,7 +28,7 @@ impl Plugin for ServerPlugin {
                                          .run_in_state(GameState::Running)
                                          .with_system(server_handle_packets)
                                          .into())
-            .add_system(client_disconnect.run_not_in_state(GameState::MainMenu));;
+            .add_system(client_disconnect.run_not_in_state(GameState::MainMenu));
     }
 }
 
