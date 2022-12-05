@@ -2,11 +2,11 @@
 //#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{env, thread};
+
 use bevy::diagnostic::DiagnosticsPlugin;
 use bevy::input::InputPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
-use bevy::window::WindowPlugin;
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 
@@ -66,7 +66,6 @@ fn main() {
                         unfocused_mode: UpdateMode::Continuous
                     })
                     .add_plugin(server::server::ServerPlugin { server_addr: server_addr.clone() })
-                    .add_plugin(server::server_handle::ServerHandlePlugin)
                     .add_plugin(common::CommonPlugin { is_client: false })
                     .add_plugin(food::FoodPlugin { is_client: false })
                     .add_plugin(snake::SnakePlugin)
@@ -106,7 +105,6 @@ fn main() {
             .add_plugin(food::FoodPlugin { is_client: true })
             .add_plugin(snake::SnakePlugin)
             .add_plugin(client::client::ClientPlugin { client_addr, server_addr: server_addr.clone() })
-            .add_plugin(client::client_handle::ClientHandlePlugin)
             .run();
     }
 }

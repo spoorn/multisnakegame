@@ -1,4 +1,5 @@
 use bevy::prelude::Component;
+use serde::{Deserialize, Serialize};
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Position {
@@ -18,7 +19,7 @@ impl Size {
     }
 }
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum Direction {
     Left,
     Up,

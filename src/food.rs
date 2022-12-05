@@ -60,6 +60,7 @@ pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option
     }
 }
 
+// Server only
 fn auto_spawn_food(mut commands: Commands, mut food_id: ResMut<FoodId>, mut manager: ResMut<ServerPacketManager>) {
     let x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
     let y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
