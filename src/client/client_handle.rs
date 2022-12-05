@@ -41,7 +41,7 @@ fn client_handle_packets(mut manager: ResMut<ClientPacketManager>,
     let manager = &mut manager.manager;
 
     let snake_positions = manager.received::<SnakePositions, SnakePositionsPacketBuilder>(false).unwrap();
-    let mut spawn_foods = manager.received::<SpawnFood, SpawnFoodPacketBuilder>(false).unwrap();
+    let spawn_foods = manager.received::<SpawnFood, SpawnFoodPacketBuilder>(false).unwrap();
     
     match spawn_foods {
         None => {
@@ -57,7 +57,7 @@ fn client_handle_packets(mut manager: ResMut<ClientPacketManager>,
     }
 }
 
-fn exit_system(mut manager: ResMut<ClientPacketManager>, mut exit: EventReader<AppExit>, mut close_window: EventReader<WindowCloseRequested>) {
+fn exit_system(mut manager: ResMut<ClientPacketManager>, exit: EventReader<AppExit>, close_window: EventReader<WindowCloseRequested>) {
     if !exit.is_empty() || !close_window.is_empty() {
         manager.manager.send(Disconnect).unwrap();
     }

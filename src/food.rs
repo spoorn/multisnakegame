@@ -42,7 +42,7 @@ fn setup_food(mut commands: Commands) {
     commands.insert_resource::<FoodId>(FoodId { id: 0 });
 }
 
-pub fn spawn_food(mut commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, x: i32, y: i32) {
+pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, x: i32, y: i32) {
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
