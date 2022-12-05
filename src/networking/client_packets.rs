@@ -8,6 +8,6 @@ pub struct StartNewGame;
 pub struct Disconnect;
 
 #[bincode_packet]
-pub struct MoveSnake {
-    direction: Direction
+pub struct SnakeMovement {
+    pub direction: Direction
 }

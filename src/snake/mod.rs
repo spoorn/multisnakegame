@@ -8,13 +8,14 @@ use crate::snake::components::{SnakeHead, SnakeState, Tail};
 use crate::state::GameState;
 
 pub mod components;
+pub mod server;
+pub mod client;
 
 pub struct SnakePlugin;
 
 impl Plugin for SnakePlugin {
     fn build(&self, app: &mut App) {
-        app.add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement))
-            .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
+        app.add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement));
     }
 }
 
@@ -57,25 +58,6 @@ pub fn spawn_tail(commands: &mut Commands, position: Position) -> Entity {
         .insert(position)
         .insert(Size::square(0.7))
         .id()
-}
-
-fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mut SnakeHead>) {
-    for mut head in head_positions.iter_mut() {
-        let dir: Direction = if keys.pressed(KeyCode::Left) {
-            Direction::Left
-        } else if keys.pressed(KeyCode::Down) {
-            Direction::Down
-        } else if keys.pressed(KeyCode::Up) {
-            Direction::Up
-        } else if keys.pressed(KeyCode::Right) {
-            Direction::Right
-        } else {
-            head.input_direction
-        };
-        if dir != head.direction.opposite() {
-            head.input_direction = dir;
-        }
-    }
 }
 
 fn snake_movement(
