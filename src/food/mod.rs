@@ -12,6 +12,7 @@ use crate::networking::server_packets::SpawnFood;
 pub mod components;
 pub mod resources;
 pub mod server;
+pub mod client;
 
 pub struct FoodPlugin;
 

@@ -71,7 +71,7 @@ fn position_translation(
     if let Some(window) = windows.get_primary() {
         // Server should correct the position according to arena width/height before sending to client.
         // Client only needs to correct position for any client-tracked positions
-        for (mut pos, mut transform, head) in q.iter_mut() {
+        for (pos, mut transform, head) in q.iter_mut() {
             let z = if head.is_some() { 1.0 } else { 0.0 };
 
             transform.translation = Vec3::new(
