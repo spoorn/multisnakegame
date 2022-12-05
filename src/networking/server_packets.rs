@@ -23,3 +23,8 @@ pub struct SnakePosition {
     pub direction: Direction,
     pub position: (i32, i32)
 }
+
+#[bincode_packet]
+pub struct EatFood {
+    pub position: (i32, i32)
+}

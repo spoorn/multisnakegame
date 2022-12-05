@@ -10,6 +10,7 @@ use crate::common::constants::{ARENA_HEIGHT, ARENA_WIDTH};
 use crate::food::components::Food;
 use crate::food::resources::FoodId;
 use crate::food::spawn_food;
+use crate::networking::server_packets::EatFood;
 use crate::server::server::ServerPacketManager;
 use crate::snake::components::{SnakeHead, SnakeState};
 use crate::snake::spawn_tail;
@@ -35,6 +36,7 @@ fn auto_spawn_food(mut commands: Commands, mut food_id: ResMut<FoodId>, mut mana
 
 fn eat_food(
     mut commands: Commands,
+    mut manager: ResMut<ServerPacketManager>,
     foods: Query<(Entity, &Position), With<Food>>,
     mut snakes: Query<(&Position, &mut SnakeHead)>,
     positions: Query<&Position, (Without<SnakeHead>, Without<Food>)>,
@@ -44,6 +46,7 @@ fn eat_food(
     for (position, mut head) in snakes.iter_mut() {
         if let Some(entity) = food_positions.get(position) {
             commands.entity(*entity).despawn();
+            manager.manager.send(EatFood { position: (position.x, position.y) }).unwrap();
             let mut position = position;
             if !head.tail.is_empty() {
                 position = positions.get(*head.tail.last().unwrap()).unwrap();
