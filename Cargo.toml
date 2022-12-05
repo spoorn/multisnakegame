@@ -27,6 +27,7 @@ bevy_embedded_assets = "0.4"
 # To close the console window on client
 # https://stackoverflow.com/questions/29763647/how-to-make-a-program-that-does-not-display-the-console-window
 winapi = { version = "0.3", features = ["wincon", "winuser"] }
+dashmap = "5.4.0"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
