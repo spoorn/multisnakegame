@@ -7,7 +7,7 @@ use networking::packet::PacketManager;
 use crate::common::components::Position;
 use crate::food::components::Food;
 use crate::networking::client_packets::{Disconnect, DisconnectPacketBuilder, SnakeMovement, SnakeMovementPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
-use crate::networking::server_packets::{EatFood, SnakePositions, SpawnFood, StartNewGameAck};
+use crate::networking::server_packets::{EatFood, SnakePositions, SpawnFood, SpawnTail, StartNewGameAck};
 use crate::server::resources::ServerInfo;
 use crate::snake::components::SnakeHead;
 use crate::state::GameState;
@@ -38,7 +38,7 @@ pub struct ServerPacketManager {
 
 fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     let mut manager = PacketManager::new();
-    manager.init_connection(true, 3, 4, server_info.server_addr.to_owned(), None).unwrap();
+    manager.init_connection(true, 3, 5, server_info.server_addr.to_owned(), None).unwrap();
     manager.register_receive_packet::<StartNewGame>(StartNewGamePacketBuilder).unwrap();
     manager.register_receive_packet::<Disconnect>(DisconnectPacketBuilder).unwrap();
     manager.register_receive_packet::<SnakeMovement>(SnakeMovementPacketBuilder).unwrap();
@@ -46,6 +46,7 @@ fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     manager.register_send_packet::<SnakePositions>().unwrap();
     manager.register_send_packet::<SpawnFood>().unwrap();
     manager.register_send_packet::<EatFood>().unwrap();
+    manager.register_send_packet::<SpawnTail>().unwrap();
     commands.insert_resource(ServerPacketManager { manager });
 }
 

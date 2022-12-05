@@ -4,8 +4,9 @@ use bevy::prelude::*;
 use iyes_loopless::prelude::*;
 
 use crate::common::components::{Direction, Position, Size};
-use crate::snake::components::{SnakeHead, SnakeState, Tail};
-use crate::state::GameState;
+use crate::networking::server_packets::SpawnTail;
+use crate::server::server::ServerPacketManager;
+use crate::snake::components::{SnakeHead, Tail};
 
 pub mod components;
 pub mod server;
@@ -43,9 +44,8 @@ pub fn spawn_snake(mut commands: Commands) {
         .insert(Size::square(0.8));
 }
 
-#[inline]
-pub fn spawn_tail(commands: &mut Commands, position: Position) -> Entity {
-    commands
+pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>) -> Entity {
+    let res = commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
                 color: SNAKE_SEGMENT_COLOR,
@@ -56,7 +56,11 @@ pub fn spawn_tail(commands: &mut Commands, position: Position) -> Entity {
         .insert(Tail)
         .insert(position)
         .insert(Size::square(0.7))
-        .id()
+        .id();
+    if let Some(mut manager) = manager {
+        manager.manager.send(SpawnTail { position: (position.x, position.y) }).unwrap();
+    }
+    res
 }
 
 pub fn move_snake(time_delta: Duration, mut position: &mut Position, mut head: &mut SnakeHead, mut positions: &mut Query<&mut Position, Without<SnakeHead>>) -> bool {

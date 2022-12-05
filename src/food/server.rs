@@ -74,7 +74,7 @@ fn eat_food(
             if !head.tail.is_empty() {
                 position = positions.get(*head.tail.last().unwrap()).unwrap();
             }
-            head.tail.push(spawn_tail(&mut commands, *position));
+            head.tail.push(spawn_tail(&mut commands, *position, Some(manager.as_mut())));
         }
     }
 }

@@ -51,10 +51,17 @@ fn snake_movement(
         let moved = move_snake(time.delta(), position.as_mut(), head.as_mut(), &mut positions);
         correct_position_at_ends(position.as_mut());
         if moved {
+            let mut tail_positions = vec![];
+            for entity in head.tail.iter() {
+                let tail_pos = positions.get(*entity).unwrap();
+                tail_positions.push((tail_pos.x, tail_pos.y));
+            }
+            
             snake_positions.push(SnakePosition {
                 input_direction: head.input_direction,
                 direction: head.direction,
-                position: (position.x, position.y)
+                position: (position.x, position.y),
+                tail_positions
             });
         }
     }

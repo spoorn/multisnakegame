@@ -21,10 +21,16 @@ pub struct SnakePositions {
 pub struct SnakePosition {
     pub input_direction: Direction,
     pub direction: Direction,
-    pub position: (i32, i32)
+    pub position: (i32, i32),
+    pub tail_positions: Vec<(i32, i32)>
 }
 
 #[bincode_packet]
 pub struct EatFood {
+    pub position: (i32, i32)
+}
+
+#[bincode_packet]
+pub struct SpawnTail {
     pub position: (i32, i32)
 }
