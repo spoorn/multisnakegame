@@ -5,6 +5,7 @@ use crate::common::components::Direction;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SystemLabel)]
 pub enum SnakeState {
     Movement,
+    EatFood
 }
 
 #[derive(Component)]

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::utils::HashMap;
 
 use networking::packet::PacketManager;
 
@@ -27,7 +28,7 @@ fn setup_food(mut commands: Commands) {
     commands.insert_resource::<FoodId>(FoodId { id: 0 });
 }
 
-pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, x: i32, y: i32) {
+pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option<&mut PacketManager>, position: Position) {
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
@@ -37,10 +38,20 @@ pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option
             ..default()
         })
         .insert(Food { id: food_id.id })
-        .insert(Position { x, y })
+        .insert(position)
         .insert(Size::square(0.8));
     food_id.id += 1;
     if let Some(manager) = manager {
-        manager.send(SpawnFood { position: (x, y) }).unwrap();
+        manager.send(SpawnFood { position: (position.x, position.y) }).unwrap();
     }
+}
+
+#[inline]
+fn get_food_positions(foods: Query<(Entity, &Position), With<Food>>) -> HashMap<Position, Entity> {
+    let mut food_positions: HashMap<Position, Entity> = HashMap::new();
+    // Assumes there is only one food per position
+    for (entity, position) in foods.iter() {
+        food_positions.insert(*position, entity);
+    }
+    food_positions
 }
