@@ -3,8 +3,9 @@ use bevy::prelude::*;
 use iyes_loopless::prelude::IntoConditionalSystem;
 use crate::client::resources::ClientPacketManager;
 
-use crate::common::components::Direction;
+use crate::common::components::{Direction, Position};
 use crate::networking::client_packets::SnakeMovement;
+use crate::networking::server_packets::{SnakePositions, SnakePositionsPacketBuilder};
 use crate::snake::components::{SnakeHead, SnakeState};
 use crate::state::GameState;
 
@@ -13,7 +14,25 @@ pub struct SnakeClientPlugin;
 impl Plugin for SnakeClientPlugin {
     
     fn build(&self, app: &mut App) {
-        app.add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
+        app
+            .add_system(update_snake_positions.run_in_state(GameState::Running).label(SnakeState::Movement))
+            .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
+    }
+}
+
+fn update_snake_positions(mut manager: ResMut<ClientPacketManager>, mut q: Query<(&mut Position, &mut SnakeHead)>) {
+    let snake_positions = manager.manager.received::<SnakePositions, SnakePositionsPacketBuilder>(false).unwrap();
+    if let Some(snake_positions) = snake_positions {
+        for snake_position in snake_positions.iter() {
+            for orientation in snake_position.positions.iter() {
+                for (mut pos, mut head) in q.iter_mut() {
+                    pos.x = orientation.position.0;
+                    pos.y = orientation.position.1;
+                    head.input_direction = orientation.input_direction;
+                    head.direction = orientation.direction;
+                }
+            }
+        }
     }
 }
 

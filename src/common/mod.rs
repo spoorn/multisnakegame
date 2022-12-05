@@ -34,6 +34,20 @@ impl Plugin for CommonPlugin {
     }
 }
 
+pub fn correct_position_at_ends(mut pos: &mut Position) {
+    if pos.x >= ARENA_WIDTH as i32 {
+        pos.x = 0;
+    } else if pos.x < 0 {
+        pos.x = ARENA_WIDTH as i32 - 1;
+    }
+
+    if pos.y >= ARENA_HEIGHT as i32 {
+        pos.y = 0;
+    } else if pos.y < 0 {
+        pos.y = ARENA_HEIGHT as i32 - 1;
+    }
+}
+
 fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
     if let Some(window) = windows.get_primary() {
         for (sprite_size, mut transform) in q.iter_mut() {
@@ -55,19 +69,9 @@ fn position_translation(
         pos / bound_game * bound_window - (bound_window / 2.) + (tile_size / 2.)
     }
     if let Some(window) = windows.get_primary() {
+        // Server should correct the position according to arena width/height before sending to client.
+        // Client only needs to correct position for any client-tracked positions
         for (mut pos, mut transform, head) in q.iter_mut() {
-            if pos.x >= ARENA_WIDTH as i32 {
-                pos.x = 0;
-            } else if pos.x < 0 {
-                pos.x = ARENA_WIDTH as i32 - 1;
-            }
-
-            if pos.y >= ARENA_HEIGHT as i32 {
-                pos.y = 0;
-            } else if pos.y < 0 {
-                pos.y = ARENA_HEIGHT as i32 - 1;
-            }
-
             let z = if head.is_some() { 1.0 } else { 0.0 };
 
             transform.translation = Vec3::new(

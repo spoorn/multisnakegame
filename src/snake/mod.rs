@@ -15,7 +15,6 @@ pub struct SnakePlugin;
 
 impl Plugin for SnakePlugin {
     fn build(&self, app: &mut App) {
-        app.add_system(snake_movement.run_in_state(GameState::Running).label(SnakeState::Movement));
     }
 }
 
@@ -60,52 +59,49 @@ pub fn spawn_tail(commands: &mut Commands, position: Position) -> Entity {
         .id()
 }
 
-fn snake_movement(
-    time: Res<Time>,
-    mut head_positions: Query<(&mut Position, &mut SnakeHead)>,
-    mut positions: Query<&mut Position, Without<SnakeHead>>,
-) {
-    for (mut position, mut head) in head_positions.iter_mut() {
-        if head.timer.finished() {
-            // Tail
-            for (i, tail) in head.tail.iter().enumerate().rev() {
-                if i == 0 {
-                    let mut pos = positions.get_mut(*tail).unwrap();
-                    pos.x = position.x;
-                    pos.y = position.y;
-                } else {
-                    let next_x;
-                    let next_y;
-                    // Beat borrow checker
-                    {
-                        let next_pos = positions.get(head.tail[i - 1]).unwrap();
-                        next_x = next_pos.x;
-                        next_y = next_pos.y;
-                    }
-                    let mut pos = positions.get_mut(*tail).unwrap();
-                    pos.x = next_x;
-                    pos.y = next_y;
+pub fn move_snake(time_delta: Duration, mut position: &mut Position, mut head: &mut SnakeHead, mut positions: &mut Query<&mut Position, Without<SnakeHead>>) -> bool {
+    let mut res = false;
+    if head.timer.finished() {
+        // Tail
+        for (i, tail) in head.tail.iter().enumerate().rev() {
+            if i == 0 {
+                let mut pos = positions.get_mut(*tail).unwrap();
+                pos.x = position.x;
+                pos.y = position.y;
+            } else {
+                let next_x;
+                let next_y;
+                // Beat borrow checker
+                {
+                    let next_pos = positions.get(head.tail[i - 1]).unwrap();
+                    next_x = next_pos.x;
+                    next_y = next_pos.y;
                 }
-            }
-
-            // Head
-            head.direction = head.input_direction;
-            match &head.input_direction {
-                Direction::Left => {
-                    position.x -= 1;
-                }
-                Direction::Up => {
-                    position.y += 1;
-                }
-                Direction::Right => {
-                    position.x += 1;
-                }
-                Direction::Down => {
-                    position.y -= 1;
-                }
+                let mut pos = positions.get_mut(*tail).unwrap();
+                pos.x = next_x;
+                pos.y = next_y;
             }
         }
 
-        head.timer.tick(time.delta());
+        // Head
+        head.direction = head.input_direction;
+        match &head.input_direction {
+            Direction::Left => {
+                position.x -= 1;
+            }
+            Direction::Up => {
+                position.y += 1;
+            }
+            Direction::Right => {
+                position.x += 1;
+            }
+            Direction::Down => {
+                position.y -= 1;
+            }
+        }
+        res = true;
     }
+
+    head.timer.tick(time_delta);
+    res
 }

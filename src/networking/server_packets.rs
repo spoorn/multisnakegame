@@ -1,4 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use networking_macros::bincode_packet;
+
+use crate::common::components::Direction;
 
 #[bincode_packet]
 pub struct StartNewGameAck;
@@ -10,5 +14,12 @@ pub struct SpawnFood {
 
 #[bincode_packet]
 pub struct SnakePositions {
-    pub head_positions: Vec<(i32, i32)>
+    pub positions: Vec<SnakePosition>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SnakePosition {
+    pub input_direction: Direction,
+    pub direction: Direction,
+    pub position: (i32, i32)
 }

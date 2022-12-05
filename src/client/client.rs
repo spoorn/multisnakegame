@@ -63,7 +63,6 @@ fn client_handle_packets(mut manager: ResMut<ClientPacketManager>,
                          mut food_id: ResMut<FoodId>) {
     let manager = &mut manager.manager;
 
-    let snake_positions = manager.received::<SnakePositions, SnakePositionsPacketBuilder>(false).unwrap();
     let spawn_foods = manager.received::<SpawnFood, SpawnFoodPacketBuilder>(false).unwrap();
 
     match spawn_foods {
