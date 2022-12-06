@@ -38,7 +38,7 @@ pub struct ServerPacketManager {
 
 fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     let mut manager = PacketManager::new();
-    manager.init_connection(true, 3, 5, server_info.server_addr.to_owned(), None, 1, None).unwrap();
+    manager.init_connections(true, 3, 5, server_info.server_addr.to_owned(), None, 1, None).unwrap();
     manager.register_receive_packet::<StartNewGame>(StartNewGamePacketBuilder).unwrap();
     manager.register_receive_packet::<Disconnect>(DisconnectPacketBuilder).unwrap();
     manager.register_receive_packet::<SnakeMovement>(SnakeMovementPacketBuilder).unwrap();
