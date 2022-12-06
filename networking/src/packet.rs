@@ -16,7 +16,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 
-use networking_macros::ErrorMessageNew;
+use networking_macros::ErrorOnlyMessage;
 
 use crate::quinn_helpers::{make_client_endpoint, make_server_endpoint};
 
@@ -34,17 +34,17 @@ pub trait PacketBuilder<T: Packet> {
     fn read(&self, bytes: Bytes) -> Result<T, Box<dyn Error>>;
 }
 
-#[derive(Debug, Clone, Display, ErrorMessageNew)]
+#[derive(Debug, Clone, Display, ErrorOnlyMessage)]
 pub struct ConnectionError {
     message: String
 }
 
-#[derive(Debug, Clone, Display, ErrorMessageNew)]
+#[derive(Debug, Clone, Display, ErrorOnlyMessage)]
 pub struct ReceiveError {
     message: String
 }
 
-#[derive(Debug, Clone, Display, ErrorMessageNew)]
+#[derive(Debug, Clone, Display, ErrorOnlyMessage)]
 pub struct SendError {
     message: String
 }
@@ -118,6 +118,7 @@ impl PacketManager {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_init_connection()?");
             }
             Some(runtime) => {
+                self.validate_connection_prereqs(num_incoming_streams, num_outgoing_streams)?;
                 // TODO: this isn't so great, we can refactor to create static methods that don't require mutable ref to self, and use those instead later on
                 runtime.block_on(PacketManager::async_init_connections_helper(is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr,
                                                                                         wait_for_clients, expected_num_clients, &self.runtime, &self.send_streams, &self.rx,
@@ -130,9 +131,22 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_init_connections(), make sure you create the PacketManager using new_async(), not new()");
         }
+        self.validate_connection_prereqs(num_incoming_streams, num_outgoing_streams)?;
         PacketManager::async_init_connections_helper(is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr, 
                                                      wait_for_clients, expected_num_clients, &self.runtime, &self.send_streams, &self.rx, 
                                                      &self.client_connections, &mut self.server_connection).await
+    }
+    
+    fn validate_connection_prereqs(&self, num_incoming_streams: u32, num_outgoing_streams: u32) -> Result<(), ConnectionError> {
+        let num_receive_packets = self.receive_packets.len() as u32;
+        if num_receive_packets != num_incoming_streams {
+            return Err(ConnectionError::new(format!("num_incoming_streams={} does not match number of registered receive packets={}.  Did you forget to call register_receive_packet()?", num_incoming_streams, num_receive_packets)));
+        }
+        let num_send_packets = self.send_packets.len() as u32;
+        if num_send_packets != num_outgoing_streams {
+            return Err(ConnectionError::new(format!("num_outgoing_streams={} does not match number of registered send packets={}.  Did you forget to call register_send_packet()?", num_incoming_streams, num_send_packets)));
+        }
+        Ok(())
     }
 
         // TODO: validate number of streams against registered packets 
@@ -617,6 +631,7 @@ impl PacketManager {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
     use tokio::sync::mpsc;
     use tokio::time::sleep;
 

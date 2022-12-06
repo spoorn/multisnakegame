@@ -81,8 +81,8 @@ pub fn unit_packet(tokens: TokenStream) -> TokenStream {
     }.into();
 }
 
-#[proc_macro_derive(ErrorMessageNew)]
-pub fn error_message_new(tokens: TokenStream) -> TokenStream {
+#[proc_macro_derive(ErrorOnlyMessage)]
+pub fn error_only_message(tokens: TokenStream) -> TokenStream {
     let input = parse_macro_input!(tokens as DeriveInput);
     let name = input.ident;
 
@@ -116,6 +116,8 @@ pub fn error_message_new(tokens: TokenStream) -> TokenStream {
                 }
             }
         }
+        
+        impl Error for #name {}
     };
     modified.into()
 }
