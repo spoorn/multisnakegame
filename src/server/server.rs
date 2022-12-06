@@ -1,15 +1,13 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use iyes_loopless::prelude::{AppLooplessStateExt, ConditionSet, IntoConditionalSystem, NextState};
+use iyes_loopless::prelude::{AppLooplessStateExt, IntoConditionalSystem};
+use iyes_loopless::state::NextState;
 
-use networking::packet::PacketManager;
+use networking::packet::{PacketManager, ReceiveError};
 
-use crate::common::components::Position;
-use crate::food::components::Food;
-use crate::networking::client_packets::{Disconnect, DisconnectPacketBuilder, SnakeMovement, SnakeMovementPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
-use crate::networking::server_packets::{EatFood, SnakePositions, SpawnFood, SpawnTail, StartNewGameAck};
-use crate::server::resources::ServerInfo;
-use crate::snake::components::SnakeHead;
+use crate::networking::client_packets::{Disconnect, DisconnectPacketBuilder, Ready, ReadyPacketBuilder, SnakeMovement, SnakeMovementPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
+use crate::networking::server_packets::{EatFood, ReadyAck, SnakePositions, SpawnFood, SpawnSnake, SpawnTail, StartNewGameAck};
+use crate::server::resources::{ReadyCount, ServerInfo, ServerPacketManager};
 use crate::state::GameState;
 
 pub struct ServerPlugin {
@@ -19,21 +17,13 @@ pub struct ServerPlugin {
 impl Plugin for ServerPlugin {
 
     fn build(&self, app: &mut App) {
-        app.insert_resource(ServerInfo { server_addr: self.server_addr.to_owned() })
+        app.insert_resource(ServerInfo { server_addr: self.server_addr.to_owned(), want_num_clients: 2 })
+            .insert_resource(ReadyCount { count: 0 })
             .add_startup_system(setup_packet_manager)
             .add_loopless_state(GameState::MainMenu)
-            .add_system(wait_for_start_game_ack.run_in_state(GameState::MainMenu))
-            .add_system_set_to_stage(CoreStage::Last,
-                                     ConditionSet::new()
-                                         .run_in_state(GameState::Running)
-                                         .with_system(server_handle_packets)
-                                         .into())
-            .add_system(client_disconnect.run_not_in_state(GameState::MainMenu));
+            .add_system(client_disconnect.run_not_in_state(GameState::MainMenu))
+            .add_system(wait_for_ready.run_in_state(GameState::PreGame));
     }
-}
-
-pub struct ServerPacketManager {
-    pub manager: PacketManager
 }
 
 fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
@@ -41,45 +31,43 @@ fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     manager.register_receive_packet::<StartNewGame>(StartNewGamePacketBuilder).unwrap();
     manager.register_receive_packet::<Disconnect>(DisconnectPacketBuilder).unwrap();
     manager.register_receive_packet::<SnakeMovement>(SnakeMovementPacketBuilder).unwrap();
+    manager.register_receive_packet::<Ready>(ReadyPacketBuilder).unwrap();
     manager.register_send_packet::<StartNewGameAck>().unwrap();
+    manager.register_send_packet::<SpawnSnake>().unwrap();
+    manager.register_send_packet::<ReadyAck>().unwrap();
     manager.register_send_packet::<SnakePositions>().unwrap();
     manager.register_send_packet::<SpawnFood>().unwrap();
     manager.register_send_packet::<EatFood>().unwrap();
     manager.register_send_packet::<SpawnTail>().unwrap();
-    manager.init_connections(true, 3, 5, server_info.server_addr.to_owned(), None, 1, None).unwrap();
+    manager.init_connections(true, 4, 7, server_info.server_addr.to_owned(), None, 1, Some(server_info.want_num_clients as u32)).unwrap();
     
     commands.insert_resource(ServerPacketManager { manager });
 }
 
-fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPacketManager>) {
-    let acks = manager.manager.received_all::<StartNewGame, StartNewGamePacketBuilder>(false).unwrap();
-    for (addr, ack) in acks.iter() {
-        if ack.is_some() {
-            commands.insert_resource(NextState(GameState::PreGame));
-            manager.manager.send_to(addr, StartNewGameAck).unwrap();
+fn wait_for_ready(mut commands: Commands, mut manager: ResMut<ServerPacketManager>, mut ready_count: ResMut<ReadyCount>, server_info: Res<ServerInfo>) {
+    match manager.received_all::<Ready, ReadyPacketBuilder>(false) {
+        Ok(readies) => {
+            ready_count.count += readies.len() as i32;
+            if ready_count.count < 0 {
+                panic!("[server] Got more Ready packets than clients!");
+            } else if ready_count.count == server_info.want_num_clients as i32 {
+                manager.broadcast(ReadyAck).unwrap();
+                commands.insert_resource(NextState(GameState::Running));
+            }
+        }
+        Err(e) => {
+            panic!("[server] Could not receive Ready packets from clients: {}", e);
         }
     }
-}
-
-fn server_handle_packets(mut manager: ResMut<ServerPacketManager>,
-                         q: Query<(&Position, Option<&SnakeHead>, Option<&Food>)>) {
-    let manager = &mut manager.manager;
-
-    let mut snake_positions = vec![];
-    for (pos, head, food) in q.iter() {
-        if head.is_some() {
-            snake_positions.push((pos.x, pos.y))
-        }
-    }
-
-    // let snake_pos_packet = SnakePositions { head_positions: snake_positions };
-    // manager.send(snake_pos_packet).unwrap();
 }
 
 fn client_disconnect(mut manager: ResMut<ServerPacketManager>, mut exit: EventWriter<AppExit>) {
-    let disconnects = manager.manager.received::<Disconnect, DisconnectPacketBuilder>(false).unwrap();
-    // TODO: Check all clients
-    if disconnects.is_some() && disconnects.unwrap().len() > 0 {
-        exit.send(AppExit);
+    let disconnects = manager.manager.received_all::<Disconnect, DisconnectPacketBuilder>(false).unwrap();
+    // TODO: Check all clients and only remove the dced one
+    for (_addr, disconnect) in disconnects.into_iter() {
+        if disconnect.is_some() && disconnect.unwrap().len() > 0 {
+            exit.send(AppExit);
+            break;
+        }
     }
 }

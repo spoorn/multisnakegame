@@ -5,12 +5,13 @@ use iyes_loopless::prelude::*;
 
 use crate::common::components::{Direction, Position, Size};
 use crate::networking::server_packets::SpawnTail;
-use crate::server::server::ServerPacketManager;
+use crate::server::resources::ServerPacketManager;
 use crate::snake::components::{SnakeHead, Tail};
 
 pub mod components;
 pub mod server;
 pub mod client;
+pub mod resources;
 
 pub struct SnakePlugin;
 
@@ -22,7 +23,7 @@ impl Plugin for SnakePlugin {
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
 const SNAKE_SEGMENT_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
 
-pub fn spawn_snake(mut commands: Commands) {
+pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position) {
     let mut speed_limiter = Timer::from_seconds(0.2, true);
     // Instant tick the timer so snake starts moving immediately when spawned
     speed_limiter.tick(Duration::from_secs_f32(0.2));
@@ -35,16 +36,17 @@ pub fn spawn_snake(mut commands: Commands) {
             ..default()
         })
         .insert(SnakeHead {
+            id: snake_id,
             input_direction: Direction::Right,
             direction: Direction::Right,
             tail: vec![],
             timer: speed_limiter,
         })
-        .insert(Position { x: 3, y: 3 })
+        .insert(position)
         .insert(Size::square(0.8));
 }
 
-pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>) -> Entity {
+pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>, id: u8) -> Entity {
     let res = commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
@@ -58,7 +60,7 @@ pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Opti
         .insert(Size::square(0.7))
         .id();
     if let Some(mut manager) = manager {
-        manager.manager.send(SpawnTail { position: (position.x, position.y) }).unwrap();
+        manager.manager.broadcast(SpawnTail { id, position: (position.x, position.y) }).unwrap();
     }
     res
 }

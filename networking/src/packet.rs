@@ -564,7 +564,7 @@ impl PacketManager {
         PacketManager::async_send_helper::<T>(&packet, 0, &self.send_packets, &self.send_streams).await
     }
 
-    pub fn send_to<T: Packet + 'static>(&mut self, addr: String, packet: T) -> Result<(), SendError> {
+    pub fn send_to<T: Packet + 'static>(&mut self, addr: impl Into<String>, packet: T) -> Result<(), SendError> {
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
@@ -575,14 +575,14 @@ impl PacketManager {
                     0
                 } else {
                     // Else, we're a server and we need to fetch the client id or index
-                    self.client_connections.get(&addr).unwrap().value().0
+                    self.client_connections.get(&addr.into()).unwrap().value().0
                 };
                 runtime.block_on(PacketManager::async_send_helper::<T>(&packet, send_index as usize, &self.send_packets, &self.send_streams))
             }
         }
     }
 
-    pub async fn async_send_to<T: Packet + 'static>(&mut self, addr: String, packet: T) -> Result<(), SendError> {
+    pub async fn async_send_to<T: Packet + 'static>(&mut self, addr: impl Into<String>, packet: T) -> Result<(), SendError> {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
@@ -591,8 +591,7 @@ impl PacketManager {
             0
         } else {
             // Else, we're a server and we need to fetch the client id or index
-            println!("client_connections: {} {:?}", addr, self.client_connections);
-            self.client_connections.get(&addr).unwrap().value().0
+            self.client_connections.get(&addr.into()).unwrap().value().0
         };
         PacketManager::async_send_helper::<T>(&packet, send_index as usize, &self.send_packets, &self.send_streams).await
     }
@@ -613,6 +612,10 @@ impl PacketManager {
         send_stream.write_all(FRAME_BOUNDARY).await.unwrap();
         println!("Sent packet to {} with id={}, type={}", addr, id, type_name::<T>());
         Ok(())
+    }
+    
+    pub fn get_num_clients(&self) -> u32 {
+        self.client_connections.len() as u32
     }
     
     fn validate_for_send<T: Packet + 'static>(&self) -> Result<(), SendError> {

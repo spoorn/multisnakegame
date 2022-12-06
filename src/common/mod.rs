@@ -6,7 +6,6 @@ use components::Size;
 use crate::common::components::Position;
 use crate::common::constants::{ARENA_HEIGHT, ARENA_WIDTH};
 use crate::snake::components::SnakeHead;
-use crate::snake::spawn_snake;
 use crate::state::GameState;
 
 pub mod components;
@@ -18,13 +17,12 @@ pub struct CommonPlugin {
 
 impl Plugin for CommonPlugin {
     fn build(&self, app: &mut App) {
-        app.add_startup_system(setup_camera).add_enter_system(GameState::PreGame, pre_game);
+        app.add_startup_system(setup_camera);
 
         if self.is_client {
             app.add_system_set_to_stage(
                 CoreStage::PostUpdate,
                 ConditionSet::new()
-                    .run_in_state(GameState::Running)
                     .with_system(position_translation)
                     .with_system(size_scaling)
                     .into(),
@@ -84,9 +82,4 @@ fn position_translation(
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn_bundle(Camera2dBundle::default());
-}
-
-fn pre_game(mut commands: Commands) {
-    commands.insert_resource(NextState(GameState::Running));
-    spawn_snake(commands);
 }

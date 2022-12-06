@@ -10,7 +10,7 @@ use crate::food::{get_food_positions, spawn_food};
 use crate::food::components::Food;
 use crate::food::resources::FoodId;
 use crate::networking::server_packets::EatFood;
-use crate::server::server::ServerPacketManager;
+use crate::server::resources::ServerPacketManager;
 use crate::snake::components::{SnakeHead, SnakeState};
 use crate::snake::spawn_tail;
 use crate::state::GameState;
@@ -69,12 +69,14 @@ fn eat_food(
             commands.entity(*entity).despawn();
             info!("[server] Ate food at {:?}", position);
             // TODO: Send EatFood all in one go per frame
-            manager.manager.send(EatFood { position: (position.x, position.y) }).unwrap();
+            manager.manager.broadcast(EatFood { id: head.id, position: (position.x, position.y) }).unwrap();
             let mut position = position;
             if !head.tail.is_empty() {
                 position = positions.get(*head.tail.last().unwrap()).unwrap();
             }
-            head.tail.push(spawn_tail(&mut commands, *position, Some(manager.as_mut())));
+            // TODO: add color
+            let id = head.id;
+            head.tail.push(spawn_tail(&mut commands, *position, Some(manager.as_mut()), id));
         }
     }
 }

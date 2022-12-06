@@ -1,12 +1,11 @@
 use bevy::prelude::*;
-use bevy::utils::HashMap;
 use iyes_loopless::prelude::ConditionSet;
 
 use crate::client::resources::ClientPacketManager;
 use crate::common::components::Position;
+use crate::food::{get_food_positions, spawn_food};
 use crate::food::components::Food;
 use crate::food::resources::FoodId;
-use crate::food::{get_food_positions, spawn_food};
 use crate::networking::server_packets::{EatFood, EatFoodPacketBuilder, SpawnFood, SpawnFoodPacketBuilder};
 use crate::snake::components::SnakeState;
 use crate::state::GameState;

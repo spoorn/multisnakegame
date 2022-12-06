@@ -42,7 +42,7 @@ pub fn spawn_food(commands: &mut Commands, food_id: &mut FoodId, manager: Option
         .insert(Size::square(0.8));
     food_id.id += 1;
     if let Some(manager) = manager {
-        manager.send(SpawnFood { position: (position.x, position.y) }).unwrap();
+        manager.broadcast(SpawnFood { position: (position.x, position.y) }).unwrap();
     }
 }
 

@@ -10,6 +10,7 @@ pub enum SnakeState {
 
 #[derive(Component)]
 pub struct SnakeHead {
+    pub id: u8,
     pub input_direction: Direction,
     pub direction: Direction,
     pub tail: Vec<Entity>,
