@@ -23,7 +23,7 @@ use crate::quinn_helpers::{make_client_endpoint, make_server_endpoint};
 const FRAME_BOUNDARY: &[u8] = b"AAAAAA031320050421";
 
 pub trait Packet {
-    fn to_bytes(self) -> Bytes;
+    fn as_bytes(&self) -> Bytes;
     
     // https://stackoverflow.com/questions/33687447/how-to-get-a-reference-to-a-concrete-type-from-a-trait-object
     // fn as_any(self: Self) -> Box<dyn Any>;
@@ -55,11 +55,11 @@ pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    recv_streams: Arc<RwLock<Vec<(String, DashMap<u32, RecvStream>)>>>,
     send_streams: Arc<RwLock<Vec<(String, DashMap<u32, SendStream>)>>>,
     rx: Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>,
     // Endpoint and Connection structs moved to the struct fields to prevent closing connections
     // by dropping.
+    // Client addr to (index in above Vecs, Connection)
     client_connections: Arc<DashMap<String, Connection>>,
     server_connection: Option<Connection>,
     next_receive_id: u32,
@@ -82,7 +82,6 @@ impl PacketManager {
                     receive_packets: BiMap::new(),
                     send_packets: BiMap::new(),
                     recv_packet_builders: HashMap::new(),
-                    recv_streams: Arc::new(RwLock::new(vec![])),
                     send_streams: Arc::new(RwLock::new(vec![])),
                     rx: Arc::new(RwLock::new(vec![])),
                     client_connections: Arc::new(DashMap::new()),
@@ -103,7 +102,6 @@ impl PacketManager {
             receive_packets: BiMap::new(),
             send_packets: BiMap::new(),
             recv_packet_builders: HashMap::new(),
-            recv_streams: Arc::new(RwLock::new(vec![])),
             send_streams: Arc::new(RwLock::new(vec![])),
             rx: Arc::new(RwLock::new(vec![])),
             client_connections: Arc::new(DashMap::new()),
@@ -330,7 +328,7 @@ impl PacketManager {
                                         if matches!(frame.as_ref(), FRAME_BOUNDARY) {
                                             println!("Found a dangling FRAME_BOUNDARY in packet frame.  This most likely is a bug in the networking library!")
                                         } else {
-                                            println!("Sending length {}", frame.len());
+                                            println!("Transmitting received bytes of length {}", frame.len());
                                             tx.send(frame).await.unwrap();
                                         }
                                     },
@@ -339,7 +337,7 @@ impl PacketManager {
                                         if matches!(reconstructed_frame.as_ref(), FRAME_BOUNDARY) {
                                             println!("Found a dangling FRAME_BOUNDARY in packet frame.  This most likely is a bug in the networking library!")
                                         } else {
-                                            println!("Sending reconstructed length {}", reconstructed_frame.len());
+                                            println!("Transmitting reconstructed received bytes of length {}", reconstructed_frame.len());
                                             tx.send(reconstructed_frame).await.unwrap();
                                         }
                                     }
@@ -395,15 +393,46 @@ impl PacketManager {
         self.next_send_id += 1;
         Ok(())
     }
-
-    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
-        self.validate_for_received::<T>()?;
+    
+    pub fn received_all<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Vec<(String, Option<Vec<T>>)>, ReceiveError> {
+        self.validate_for_received::<T>(true)?;
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
             }
             Some(runtime) => {
-                runtime.block_on(PacketManager::async_received_helper::<T, U>(blocking, &self.receive_packets, &self.recv_packet_builders, &self.rx))
+                runtime.block_on(async {
+                    let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
+                    for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
+                        res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
+                    }
+                    Ok(res)
+                })
+            }
+        }
+    }
+
+    // blocking blocks on ALL receivers
+    pub async fn async_received_all<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Vec<(String, Option<Vec<T>>)>, ReceiveError> {
+        if self.runtime.is_some() {
+            panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
+        }
+        self.validate_for_received::<T>(true)?;
+        let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
+        for (recv_index, (addr, _rx)) in self.rx.read().await.iter().enumerate() {
+            res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
+        }
+        Ok(res)
+    }
+
+    pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+        self.validate_for_received::<T>(false)?;
+        match self.runtime.as_ref() {
+            None => {
+                panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
+            }
+            Some(runtime) => {
+                runtime.block_on(PacketManager::async_received_helper::<T, U>(blocking, 0, &self.receive_packets, &self.recv_packet_builders, &self.rx))
             }
         }
     }
@@ -412,18 +441,22 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.validate_for_received::<T>()?;
-        PacketManager::async_received_helper::<T, U>(blocking, &self.receive_packets, &self.recv_packet_builders, &self.rx).await
+        self.validate_for_received::<T>(false)?;
+        PacketManager::async_received_helper::<T, U>(blocking, 0, &self.receive_packets, &self.recv_packet_builders, &self.rx).await
     }
     
     // Assumes does not have more than one client to send to, should be checked by callers
-    async fn async_received_helper<T: Packet + 'static, U: PacketBuilder<T> + 'static>(blocking: bool,
+    async fn async_received_helper<T: Packet + 'static, U: PacketBuilder<T> + 'static>(blocking: bool, recv_index: usize,
                                                                                        receive_packets: &BiMap<u32, TypeId>,
                                                                                        recv_packet_builders: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-                                                                                       rx: &Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>) -> Result<Option<Vec<T>>, ReceiveError> {
+                                                                                       rx: &Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>
+    ) -> Result<Option<Vec<T>>, ReceiveError> {
+        if rx.read().await.len() <= recv_index {
+            return Err(ReceiveError::new(format!("Could not find receiver stream for recv index={}.  Did you forget to call init_connections()?  Or there might be no clients connected yet.", recv_index)));
+        }
         let packet_type_id = TypeId::of::<T>();
         let id = receive_packets.get_by_right(&packet_type_id).unwrap();
-        let (addr, rxs) = &rx.read().await[0];
+        let (addr, rxs) = &rx.read().await[recv_index];
         let rx = &mut rxs.get_mut(id).unwrap().0;
         let mut res: Vec<T> = Vec::new();
         let packet_builder: &U = recv_packet_builders.get(&TypeId::of::<T>()).unwrap().downcast_ref::<U>().unwrap();
@@ -462,13 +495,39 @@ impl PacketManager {
         Ok(Some(res))
     }
     
-    fn validate_for_received<T: Packet + 'static>(&self) -> Result<Option<Vec<T>>, ReceiveError> {
-        if self.has_more_than_one_remote() {
+    fn validate_for_received<T: Packet + 'static>(&self, for_all: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+        if !for_all && self.has_more_than_one_remote() {
             return Err(ReceiveError::new(format!("async_received()/received() was called for packet {}, but there is more than one client.  Did you mean to call async_received_all()/received_all()?", type_name::<T>())))
         }
 
         self.validate_packet_was_registered::<T>(false)?;
         Ok(None)
+    }
+
+    pub fn broadcast<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+        match self.runtime.as_ref() {
+            None => {
+                panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
+            }
+            Some(runtime) => {
+                runtime.block_on(async {
+                    for send_index in 0..self.send_streams.clone().read().await.len() {
+                        PacketManager::async_send_helper::<T>(&packet, send_index, &self.send_packets, &self.send_streams).await?;
+                    }
+                    Ok(())
+                })
+            }
+        }
+    }
+
+    pub async fn async_broadcast<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+        if self.runtime.is_some() {
+            panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
+        }
+        for send_index in 0..self.send_streams.read().await.len() {
+            PacketManager::async_send_helper::<T>(&packet, send_index, &self.send_packets, &self.send_streams).await?;
+        }
+        Ok(())
     }
 
     pub fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
@@ -478,7 +537,7 @@ impl PacketManager {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
             }
             Some(runtime) => {
-                runtime.block_on(PacketManager::async_send_helper::<T>(packet, &self.send_packets, &self.send_streams))
+                runtime.block_on(PacketManager::async_send_helper::<T>(&packet, 0, &self.send_packets, &self.send_streams))
             }
         }
     }
@@ -488,15 +547,18 @@ impl PacketManager {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
         self.validate_for_send::<T>()?;
-        PacketManager::async_send_helper::<T>(packet, &self.send_packets, &self.send_streams).await
+        PacketManager::async_send_helper::<T>(&packet, 0, &self.send_packets, &self.send_streams).await
     }
     
-    async fn async_send_helper<T: Packet + 'static>(packet: T, send_packets: &BiMap<u32, TypeId>,
+    async fn async_send_helper<T: Packet + 'static>(packet: &T, send_index: usize, send_packets: &BiMap<u32, TypeId>,
                                                     send_streams: &Arc<RwLock<Vec<(String, DashMap<u32, SendStream>)>>>,) -> Result<(), SendError> {
-        let bytes = packet.to_bytes();
+        if send_streams.read().await.len() <= send_index {
+            return Err(SendError::new(format!("Could not find send stream for client index={}.  Did you forget to call init_connections()?  Or there might be no clients connected yet.", send_index)));
+        }
+        let bytes = packet.as_bytes();
         let packet_type_id = TypeId::of::<T>();
         let id = send_packets.get_by_right(&packet_type_id).unwrap();
-        let (addr, send_streams) = &send_streams.read().await[0];
+        let (addr, send_streams) = &send_streams.read().await[send_index];
         let mut send_stream = send_streams.get_mut(id).unwrap();
         // TODO: Make trace log
         println!("Sending bytes to {}: {:?}", addr, bytes);
@@ -554,7 +616,9 @@ impl PacketManager {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use tokio::sync::mpsc;
+    use tokio::time::sleep;
 
     use networking::packet::PacketManager;
     use networking_macros::bincode_packet;
@@ -649,6 +713,257 @@ mod tests {
         
         tx.send(0).await.unwrap();
         assert!(server.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn receive_packet_e2e_async_broadcast() {
+        let mut manager = PacketManager::new_for_async();
+
+        let (tx, mut rx) = mpsc::channel(100);
+        let server_addr = "127.0.0.1:6000";
+        let client_addr = "127.0.0.1:6001";
+        let client2_addr = "127.0.0.1:6002";
+        
+        let num_receive = 8;
+        let num_send = 8;
+
+        // Server
+        let server = tokio::spawn(async move {
+            let mut m = PacketManager::new_for_async();
+            assert!(m.register_send_packet::<Test>().is_ok());
+            assert!(m.register_send_packet::<Other>().is_ok());
+            assert!(m.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
+            assert!(m.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
+            assert!(m.async_init_connections(true, 2, 2, server_addr, None, 2, None).await.is_ok());
+
+            let mut sent_packets = 0;
+            let mut recv_packets = 0;
+            let mut all_test_packets = Vec::new();
+            let mut all_other_packets = Vec::new();
+            loop {
+                println!("server sent {}, received {}", sent_packets, recv_packets);
+                println!("all_test_packets len {}", all_test_packets.len());
+                println!("all_other_packets len {}", all_other_packets.len());
+                if sent_packets < num_send {
+                    assert!(m.async_broadcast::<Test>(Test { id: 5 }).await.is_ok());
+                    assert!(m.async_broadcast::<Test>(Test { id: 8 }).await.is_ok());
+                    assert!(m.async_broadcast::<Other>(Other { name: "spoorn".to_string(), id: 4 }).await.is_ok());
+                    assert!(m.async_broadcast::<Other>(Other { name: "kiko".to_string(), id: 6 }).await.is_ok());
+                    sent_packets += 4;
+                }
+
+                if recv_packets == num_receive * 2 {
+                    println!("server done, sent {}, received {}", sent_packets, recv_packets);
+                    break;
+                }
+
+                let test_res = m.async_received_all::<Test, TestPacketBuilder>(false).await;
+                assert!(test_res.is_ok());
+                let mut received_all = test_res.unwrap();
+                assert_eq!(received_all.len(), 2);
+                let (addr, unwrapped) = received_all.remove(0);
+                let (addr2, unwrapped2) = received_all.remove(0);
+                assert!((addr == client_addr || addr == client2_addr) && (addr != addr2));
+                if unwrapped.is_some() {
+                    let mut packets = unwrapped.unwrap();
+                    recv_packets += packets.len();
+                    all_test_packets.append(&mut packets);
+                }
+                if unwrapped2.is_some() {
+                    let mut packets = unwrapped2.unwrap();
+                    recv_packets += packets.len();
+                    all_test_packets.append(&mut packets);
+                }
+                
+                let other_res = m.async_received_all::<Other, OtherPacketBuilder>(false).await;
+                assert!(other_res.is_ok());
+                let mut received_all = other_res.unwrap();
+                assert_eq!(received_all.len(), 2);
+                let (addr, unwrapped) = received_all.remove(0);
+                let (addr2, unwrapped2) = received_all.remove(0);
+                assert!((addr == client_addr || addr == client2_addr) && (addr != addr2));
+                if unwrapped.is_some() {
+                    let mut packets = unwrapped.unwrap();
+                    recv_packets += packets.len();
+                    all_other_packets.append(&mut packets);
+                }
+                if unwrapped2.is_some() {
+                    assert!(unwrapped2.is_some());
+                    let mut packets = unwrapped2.unwrap();
+                    recv_packets += packets.len();
+                    all_other_packets.append(&mut packets);
+                }
+            }
+            
+            assert_eq!(all_test_packets.len(), num_receive);
+            assert_eq!(all_other_packets.len(), num_receive);
+            for (i, packet) in all_test_packets.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    assert_eq!(packet, Test { id: 6 });
+                } else {
+                    assert_eq!(packet, Test { id: 9 });
+                }
+            }
+            for (i, packet) in all_other_packets.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    assert_eq!(packet, Other { name: "mango".to_string(), id: 1 });
+                } else {
+                    assert_eq!(packet, Other { name: "luna".to_string(), id: 3 });
+                }
+            }
+
+            rx.recv().await;
+            // loop {
+            //     // Have to use tokio's sleep so it can yield to the tokio executor
+            //     // https://stackoverflow.com/questions/70798841/why-does-a-tokio-thread-wait-for-a-blocking-thread-before-continuing?rq=1
+            //     //sleep(Duration::from_millis(100)).await;
+            // }
+            println!("server exit");
+        });
+
+        let (client2_tx, mut client2_rx) = mpsc::channel(100);
+        let client2 = tokio::spawn(async move {
+            let mut manager = PacketManager::new_for_async();
+            assert!(manager.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
+            assert!(manager.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
+            assert!(manager.register_send_packet::<Test>().is_ok());
+            assert!(manager.register_send_packet::<Other>().is_ok());
+            assert!(manager.async_init_connections(false, 2, 2, server_addr, Some(client2_addr), 0, None).await.is_ok());
+
+            let mut sent_packets = 0;
+            let mut recv_packets = 0;
+            let mut all_test_packets = Vec::new();
+            let mut all_other_packets = Vec::new();
+            loop {
+                println!("client2 sent {}, received {}", sent_packets, recv_packets);
+                if sent_packets < num_send {
+                    assert!(manager.async_broadcast::<Test>(Test { id: 6 }).await.is_ok());
+                    assert!(manager.async_broadcast::<Test>(Test { id: 9 }).await.is_ok());
+                    assert!(manager.async_broadcast::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
+                    assert!(manager.async_broadcast::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+                    sent_packets += 4;
+                }
+
+                if recv_packets == num_receive {
+                    println!("client2 done, sent {}, received {}", sent_packets, recv_packets);
+                    sleep(Duration::from_secs(4)).await;
+                    break;
+                }
+                
+                let test_res = manager.async_received_all::<Test, TestPacketBuilder>(true).await;
+                assert!(test_res.is_ok());
+                let mut received_all = test_res.unwrap();
+                assert!(!received_all.is_empty());
+                let (addr, unwrapped) = received_all.remove(0);
+                assert_eq!(addr, server_addr);
+                assert!(unwrapped.is_some());
+                let mut packets = unwrapped.unwrap();
+                recv_packets += packets.len();
+                all_test_packets.append(&mut packets);
+                let other_res = manager.async_received::<Other, OtherPacketBuilder>(true).await;
+                assert!(other_res.is_ok());
+                let unwrapped = other_res.unwrap();
+                assert!(unwrapped.is_some());
+                let mut packets = unwrapped.unwrap();
+                recv_packets += packets.len();
+                all_other_packets.append(&mut packets);
+            }
+
+            assert_eq!(all_test_packets.len(), num_receive/2);
+            assert_eq!(all_other_packets.len(), num_receive/2);
+            for (i, packet) in all_test_packets.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    assert_eq!(packet, Test { id: 5 });
+                } else {
+                    assert_eq!(packet, Test { id: 8 });
+                }
+            }
+            for (i, packet) in all_other_packets.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    assert_eq!(packet, Other { name: "spoorn".to_string(), id: 4 });
+                } else {
+                    assert_eq!(packet, Other { name: "kiko".to_string(), id: 6 });
+                }
+            }
+
+            client2_rx.recv().await;
+            println!("client2 exit");
+        });
+
+        // Client
+        assert!(manager.register_receive_packet::<Test>(TestPacketBuilder).is_ok());
+        assert!(manager.register_receive_packet::<Other>(OtherPacketBuilder).is_ok());
+        assert!(manager.register_send_packet::<Test>().is_ok());
+        assert!(manager.register_send_packet::<Other>().is_ok());
+        let client = manager.async_init_connections(false, 2, 2, server_addr, Some(client_addr), 0, None).await;
+        println!("client1: {:#?}", client);
+
+        assert!(client.is_ok());
+
+        let mut sent_packets = 0;
+        let mut recv_packets = 0;
+        let mut all_test_packets = Vec::new();
+        let mut all_other_packets = Vec::new();
+        loop {
+            println!("client1 sent {}, received {}", sent_packets, recv_packets);
+            // Send packets
+            if sent_packets < num_send {
+                assert!(manager.async_broadcast::<Test>(Test { id: 6 }).await.is_ok());
+                assert!(manager.async_broadcast::<Test>(Test { id: 9 }).await.is_ok());
+                assert!(manager.async_broadcast::<Other>(Other { name: "mango".to_string(), id: 1 }).await.is_ok());
+                assert!(manager.async_broadcast::<Other>(Other { name: "luna".to_string(), id: 3 }).await.is_ok());
+                sent_packets += 4;
+            }
+
+            if recv_packets == num_receive {
+                println!("client1 done, sent {}, received {}", sent_packets, recv_packets);
+                break;
+            }
+
+            let test_res = manager.async_received_all::<Test, TestPacketBuilder>(true).await;
+            assert!(test_res.is_ok());
+            let mut received_all = test_res.unwrap();
+            assert!(!received_all.is_empty());
+            let (addr, unwrapped) = received_all.remove(0);
+            assert_eq!(addr, server_addr);
+            assert!(unwrapped.is_some());
+            let mut packets = unwrapped.unwrap();
+            recv_packets += packets.len();
+            all_test_packets.append(&mut packets);
+            let other_res = manager.async_received::<Other, OtherPacketBuilder>(true).await;
+            assert!(other_res.is_ok());
+            let unwrapped = other_res.unwrap();
+            assert!(unwrapped.is_some());
+            let mut packets = unwrapped.unwrap();
+            recv_packets += packets.len();
+            all_other_packets.append(&mut packets);
+        }
+
+        assert_eq!(all_test_packets.len(), num_receive/2);
+        assert_eq!(all_other_packets.len(), num_receive/2);
+        for (i, packet) in all_test_packets.into_iter().enumerate() {
+            if i % 2 == 0 {
+                assert_eq!(packet, Test { id: 5 });
+            } else {
+                assert_eq!(packet, Test { id: 8 });
+            }
+        }
+        for (i, packet) in all_other_packets.into_iter().enumerate() {
+            if i % 2 == 0 {
+                assert_eq!(packet, Other { name: "spoorn".to_string(), id: 4 });
+            } else {
+                assert_eq!(packet, Other { name: "kiko".to_string(), id: 6 });
+            }
+        }
+        
+        println!("client1 exit");
+        
+        println!("send server exit");
+        tx.send(0).await.unwrap();
+        assert!(server.await.is_ok());
+        println!("send client2 exit");
+        client2_tx.send(0).await.unwrap();
+        assert!(client2.await.is_ok());
     }
 
     #[test]

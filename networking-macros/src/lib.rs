@@ -40,8 +40,8 @@ pub fn bin_packet(tokens: TokenStream) -> TokenStream {
     
     return quote! {
         impl networking::packet::Packet for #name {
-            fn to_bytes(self) -> bytes::Bytes {
-                bytes::Bytes::from(bincode::serialize(&self).unwrap())
+            fn as_bytes(&self) -> bytes::Bytes {
+                bytes::Bytes::from(bincode::serialize(self).unwrap())
             }
         }
         
@@ -65,7 +65,7 @@ pub fn unit_packet(tokens: TokenStream) -> TokenStream {
 
     return quote! {
         impl networking::packet::Packet for #name {
-            fn to_bytes(self) -> bytes::Bytes {
+            fn as_bytes(&self) -> bytes::Bytes {
                 bytes::Bytes::from(#name_str)
             }
         }
