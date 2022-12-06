@@ -23,14 +23,14 @@ impl Plugin for SnakePlugin {
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
 const SNAKE_SEGMENT_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
 
-pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position) {
+pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position, color: Color) {
     let mut speed_limiter = Timer::from_seconds(0.2, true);
     // Instant tick the timer so snake starts moving immediately when spawned
     speed_limiter.tick(Duration::from_secs_f32(0.2));
     commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
-                color: SNAKE_HEAD_COLOR,
+                color,
                 ..default()
             },
             ..default()
@@ -41,6 +41,7 @@ pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position) {
             direction: Direction::Right,
             tail: vec![],
             timer: speed_limiter,
+            color
         })
         .insert(position)
         .insert(Size::square(0.8));

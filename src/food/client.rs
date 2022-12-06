@@ -24,7 +24,7 @@ impl Plugin for FoodClientPlugin {
             ).add_system_set_to_stage(CoreStage::PreUpdate,
                                       ConditionSet::new()
                                           .run_in_state(GameState::Running)
-                                          .after(SnakeState::EatFood)
+                                          .before(SnakeState::EatFood)
                                           .with_system(handle_spawn_food)
                                           .into()
         );

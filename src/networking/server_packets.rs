@@ -15,7 +15,8 @@ pub struct ReadyAck;
 #[bincode_packet]
 pub struct SpawnSnake {
     pub id: u8,
-    pub position: (i32, i32)
+    pub position: (i32, i32),
+    pub sRGB: (f32, f32, f32)
 }
 
 #[bincode_packet]

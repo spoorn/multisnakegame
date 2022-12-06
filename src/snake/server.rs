@@ -2,7 +2,7 @@ use bevy::app::App;
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use iyes_loopless::prelude::{IntoConditionalSystem, NextState};
-use rand::random;
+use rand::{random, Rng, thread_rng};
 
 use crate::common::components::Position;
 use crate::common::constants::{ARENA_HEIGHT, ARENA_WIDTH};
@@ -40,15 +40,18 @@ fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPac
             }
             let x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
             let y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
+            let r = thread_rng().gen_range(0.1..=1.0) as f32;
+            let g = thread_rng().gen_range(0.1..=1.0) as f32;
+            let b = thread_rng().gen_range(0.1..=1.0) as f32;
             info!("[server] Spawned snake at {}, {}", x, y);
-            spawn_snake(&mut commands, snake_id.id, Position { x, y });
+            spawn_snake(&mut commands, snake_id.id, Position { x, y }, Color::rgb(r, g, b));
             manager.manager.send_to(addr, StartNewGameAck { num_snakes: server_info.want_num_clients }).unwrap();
             // TODO: This can probably be optimized rather than broadcasting to all clients everytime, but this is simple
             // Previously spawned snakes.  Assumes client handles duplicates
             for (pos, head) in q.iter() {
-                manager.manager.broadcast(SpawnSnake { id: head.id, position: (pos.x, pos.y) }).unwrap();
+                manager.manager.broadcast(SpawnSnake { id: head.id, position: (pos.x, pos.y), sRGB: (head.color.r(), head.color.g(), head.color.b()) }).unwrap();
             }
-            manager.manager.broadcast(SpawnSnake { id: snake_id.id, position: (x, y) }).unwrap();  // The newly spawned one
+            manager.manager.broadcast(SpawnSnake { id: snake_id.id, position: (x, y), sRGB: (r, g, b) }).unwrap();  // The newly spawned one
             snake_id.id += 1;
         }
     }
@@ -81,6 +84,7 @@ fn snake_movement(
     mut head_positions: Query<(&mut Position, &mut SnakeHead)>,
     mut positions: Query<&mut Position, Without<SnakeHead>>,
 ) {
+    info!("Snake Movement");
     let mut snake_positions = vec![];
     for (mut position, mut head) in head_positions.iter_mut() {
         let moved = move_snake(time.delta(), position.as_mut(), head.as_mut(), &mut positions);

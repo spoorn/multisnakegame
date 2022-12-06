@@ -47,7 +47,7 @@ fn pre_game(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mu
             } else if spawn.id > snake_id.id {
                 panic!("[client] Received snake id={} from server that did not match client's tracked id={}", spawn.id, snake_id.id);
             }
-            spawn_snake(&mut commands, spawn.id, Position { x: spawn.position.0, y: spawn.position.1 });
+            spawn_snake(&mut commands, spawn.id, Position { x: spawn.position.0, y: spawn.position.1 }, Color::rgb(spawn.sRGB.0, spawn.sRGB.1, spawn.sRGB.2));
             snake_id.id += 1;
             num_snakes.num -= 1;
             if num_snakes.num < 0 {
@@ -85,13 +85,16 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
                         let server_tail_len = orientation.tail_positions.len();
                         // The client can have 1 more tail if it receives the SpawnTail packet before the server has finished
                         // the tick, but it should never be 2 more tails than the server
-                        if client_tail_len > server_tail_len - 1 {
+                        if client_tail_len > server_tail_len + 1 {
                             panic!("Client spawned more tails {} than server has record of {}.  This should not happen!  \
                             Most likely means there is desync between client and server, or the server spawned multiple tails in one tick.", client_tail_len, server_tail_len);
                         }
 
                         // Only modify the old tail positions, new ones should already be in the right place
                         for (i, entity) in head.tail.iter().enumerate() {
+                            if i >= server_tail_len {
+                                break;  // If client got SpawnTail packet before server has updated
+                            }
                             let mut tail_pos = tail_positions.get_mut(*entity).unwrap();
                             tail_pos.x = orientation.tail_positions[i].0;
                             tail_pos.y = orientation.tail_positions[i].1;

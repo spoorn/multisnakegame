@@ -1,4 +1,4 @@
-use bevy::prelude::{Component, Entity, SystemLabel, Timer};
+use bevy::prelude::{Color, Component, Entity, SystemLabel, Timer};
 
 use crate::common::components::Direction;
 
@@ -15,6 +15,7 @@ pub struct SnakeHead {
     pub direction: Direction,
     pub tail: Vec<Entity>,
     pub timer: Timer,
+    pub color: Color
 }
 
 #[derive(Component)]

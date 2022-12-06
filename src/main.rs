@@ -37,10 +37,8 @@ fn hide_console_window() {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let client_or_server = &args[1];
-    let server_addr = args[2].to_owned();
-    //let server_addr = "192.168.1.243:5000".to_string();
-    //let client_addr = "0.0.0.0:5001".to_string();//if args.len() >= 4 { args[3].to_owned() } else { "None".to_string() };
+    let client_or_server = if args.len() >= 2 { &args[1] } else { "client" };
+    let server_addr = if args.len() >= 3 { args[2].to_owned() } else { "192.168.1.243:5000".to_string() };
     let client_addr = if args.len() >= 4 { args[3].to_owned() } else { "0.0.0.0:5001".to_string() };
     
     if client_or_server != "client" {
