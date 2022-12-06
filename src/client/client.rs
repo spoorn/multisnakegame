@@ -29,7 +29,6 @@ impl Plugin for ClientPlugin {
 
 fn send_start_game_packet(mut commands: Commands, client_info: Res<ClientInfo>) {
     let mut manager = PacketManager::new();
-    manager.init_connections(false, 5, 3, client_info.server_addr.to_owned(), Some(client_info.client_addr.to_owned()), 1, None).unwrap();
     manager.register_receive_packet::<StartNewGameAck>(StartNewGameAckPacketBuilder).unwrap();
     manager.register_receive_packet::<SnakePositions>(SnakePositionsPacketBuilder).unwrap();
     manager.register_receive_packet::<SpawnFood>(SpawnFoodPacketBuilder).unwrap();
@@ -38,6 +37,7 @@ fn send_start_game_packet(mut commands: Commands, client_info: Res<ClientInfo>) 
     manager.register_send_packet::<StartNewGame>().unwrap();
     manager.register_send_packet::<Disconnect>().unwrap();
     manager.register_send_packet::<SnakeMovement>().unwrap();
+    manager.init_connections(false, 5, 3, client_info.server_addr.to_owned(), Some(client_info.client_addr.to_owned()), 1, None).unwrap();
     
     manager.send(StartNewGame).unwrap();
 

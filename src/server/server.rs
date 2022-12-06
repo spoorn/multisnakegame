@@ -38,7 +38,6 @@ pub struct ServerPacketManager {
 
 fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     let mut manager = PacketManager::new();
-    manager.init_connections(true, 3, 5, server_info.server_addr.to_owned(), None, 1, None).unwrap();
     manager.register_receive_packet::<StartNewGame>(StartNewGamePacketBuilder).unwrap();
     manager.register_receive_packet::<Disconnect>(DisconnectPacketBuilder).unwrap();
     manager.register_receive_packet::<SnakeMovement>(SnakeMovementPacketBuilder).unwrap();
@@ -47,14 +46,18 @@ fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     manager.register_send_packet::<SpawnFood>().unwrap();
     manager.register_send_packet::<EatFood>().unwrap();
     manager.register_send_packet::<SpawnTail>().unwrap();
+    manager.init_connections(true, 3, 5, server_info.server_addr.to_owned(), None, 1, None).unwrap();
+    
     commands.insert_resource(ServerPacketManager { manager });
 }
 
 fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPacketManager>) {
-    let ack = manager.manager.received::<StartNewGame, StartNewGamePacketBuilder>(false).unwrap();
-    if ack.is_some() {
-        commands.insert_resource(NextState(GameState::PreGame));
-        manager.manager.send(StartNewGameAck).unwrap();
+    let acks = manager.manager.received_all::<StartNewGame, StartNewGamePacketBuilder>(false).unwrap();
+    for (addr, ack) in acks.iter() {
+        if ack.is_some() {
+            commands.insert_resource(NextState(GameState::PreGame));
+            manager.manager.send_to(addr, StartNewGameAck).unwrap();
+        }
     }
 }
 
