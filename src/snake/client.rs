@@ -98,7 +98,8 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
                         // TODO: instead we can just spawn tails manually above to avoid lag, and remove SpawnTail packet,
                         if client_tail_len < server_tail_len {
                             // This is a blocking call
-                            head.tail.append(&mut handle_spawn_tail(&mut commands, &mut manager));
+                            let head_color = head.color;
+                            head.tail.append(&mut handle_spawn_tail(&mut commands, &mut manager, head_color));
                         }
                     }
                 }
@@ -128,12 +129,12 @@ fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mu
     }
 }
 
-fn handle_spawn_tail(mut commands: &mut Commands, mut manager: &mut ClientPacketManager) -> Vec<Entity> {
+fn handle_spawn_tail(mut commands: &mut Commands, mut manager: &mut ClientPacketManager, head_color: Color) -> Vec<Entity> {
     let spawn_tails = manager.manager.received::<SpawnTail, SpawnTailPacketBuilder>(false).unwrap();
     let mut tail_entities = vec![];
     if let Some(spawn_tails) = spawn_tails {
         for st in spawn_tails.iter() {
-            tail_entities.push(spawn_tail(&mut commands, Position { x: st.position.0, y: st.position.1 }, None, st.id));
+            tail_entities.push(spawn_tail(&mut commands, Position { x: st.position.0, y: st.position.1 }, None, st.id, head_color));
         }
     }
     tail_entities

@@ -76,7 +76,8 @@ fn eat_food(
             }
             // TODO: add color
             let id = head.id;
-            head.tail.push(spawn_tail(&mut commands, *position, Some(manager.as_mut()), id));
+            let head_color = head.color;
+            head.tail.push(spawn_tail(&mut commands, *position, Some(manager.as_mut()), id, head_color));
         }
     }
 }

@@ -47,11 +47,11 @@ pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position, co
         .insert(Size::square(0.8));
 }
 
-pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>, id: u8) -> Entity {
+pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>, id: u8, head_color: Color) -> Entity {
     let res = commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {
-                color: SNAKE_SEGMENT_COLOR,
+                color: Color::rgb(head_color.r() - 0.05, head_color.g() - 0.05, head_color.b() - 0.05),
                 ..default()
             },
             ..default()
