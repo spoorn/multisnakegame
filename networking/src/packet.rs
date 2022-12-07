@@ -134,7 +134,7 @@ impl PacketManager {
         }
     }
 
-    pub async fn async_init_connections<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, mut client_addr: Option<S>, wait_for_clients: u32, expected_num_clients: Option<u32>) -> Result<(), Box<dyn Error>> {
+    pub async fn async_init_connections<S: Into<String>>(&mut self, is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, server_addr: S, client_addr: Option<S>, wait_for_clients: u32, expected_num_clients: Option<u32>) -> Result<(), Box<dyn Error>> {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_init_connections(), make sure you create the PacketManager using new_async(), not new()");
         }
@@ -199,8 +199,8 @@ impl PacketManager {
             
             if expected_num_clients.is_none() || expected_num_clients.unwrap() > wait_for_clients {
                 let client_connections = client_connections.clone();
-                let mut arc_send_streams = new_send_streams.clone();
-                let mut arc_rx = new_rxs.clone();
+                let arc_send_streams = new_send_streams.clone();
+                let arc_rx = new_rxs.clone();
                 let arc_runtime = Arc::clone(runtime);
                 let mut client_id = wait_for_clients;
                 let accept_client_task = async move {
@@ -425,17 +425,6 @@ impl PacketManager {
             }
             Some(runtime) => {
                 runtime.block_on(async {
-                    // let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
-                    // let mut addr_and_recv_indices = Vec::new();
-                    // 
-                    // // Grab values out so we don't lock the receivers
-                    // for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
-                    //     addr_and_recv_indices.push((addr.to_string(), recv_index));
-                    // }
-                    // 
-                    // for (addr, recv_index) in addr_and_recv_indices.into_iter() {
-                    //     res.push((addr, PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
-                    // }
                     let mut res = vec![];
                     for (recv_index, (addr, _rx_map)) in self.rx.iter().enumerate() {
                         res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
@@ -451,19 +440,8 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.validate_for_received::<T>(true)?;
-        self.update_new_receivers();
-        // let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
-        // let mut addr_and_recv_indices = Vec::new();
-        // 
-        // // Grab values out so we don't lock the receivers
-        // for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
-        //     addr_and_recv_indices.push((addr.to_string(), recv_index));
-        // }
-        // 
-        // for (addr, recv_index) in addr_and_recv_indices.into_iter() {
-        //     res.push((addr, PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
-        // }
+        self.async_validate_for_received::<T>(true).await?;
+        self.async_update_new_receivers().await;
         let mut res = vec![];
         for (recv_index, (addr, _rx_map)) in self.rx.iter().enumerate() {
             res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
@@ -488,8 +466,8 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.validate_for_received::<T>(false)?;
-        self.update_new_receivers();
+        self.async_validate_for_received::<T>(false).await?;
+        self.async_update_new_receivers().await;
         PacketManager::async_received_helper::<T, U>(blocking, 0, &self.receive_packets, &self.recv_packet_builders, &self.rx).await
     }
     
@@ -553,9 +531,26 @@ impl PacketManager {
         self.validate_packet_was_registered::<T>(false)?;
         Ok(None)
     }
+
+    async fn async_validate_for_received<T: Packet + 'static>(&self, for_all: bool) -> Result<Option<Vec<T>>, ReceiveError> {
+        if !for_all && self.async_has_more_than_one_remote().await {
+            return Err(ReceiveError::new(format!("async_received()/received() was called for packet {}, but there is more than one client.  Did you mean to call async_received_all()/received_all()?", type_name::<T>())))
+        }
+
+        self.validate_packet_was_registered::<T>(false)?;
+        Ok(None)
+    }
     
     fn update_new_receivers(&mut self) {
         let mut new_rx_lock = self.new_rxs.blocking_write();
+        if !new_rx_lock.is_empty() {
+            let mut new_rx_vec = std::mem::take(&mut *new_rx_lock);
+            self.rx.append(&mut new_rx_vec);
+        }
+    }
+
+    async fn async_update_new_receivers(&mut self) {
+        let mut new_rx_lock = self.new_rxs.write().await;
         if !new_rx_lock.is_empty() {
             let mut new_rx_vec = std::mem::take(&mut *new_rx_lock);
             self.rx.append(&mut new_rx_vec);
@@ -584,7 +579,7 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.update_new_senders();
+        self.async_update_new_senders().await;
         let send_streams_len = self.send_streams.len();
         for send_index in 0..send_streams_len {
             PacketManager::async_send_helper::<T>(&packet, send_index, &self.send_packets, &self.send_streams).await?;
@@ -609,8 +604,8 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.validate_for_send::<T>()?;
-        self.update_new_senders();
+        self.async_validate_for_send::<T>().await?;
+        self.async_update_new_senders().await;
         PacketManager::async_send_helper::<T>(&packet, 0, &self.send_packets, &self.send_streams).await
     }
 
@@ -637,7 +632,7 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
-        self.update_new_senders();
+        self.async_update_new_senders().await;
         let send_index = if self.server_connection.is_some() {
             // We are the client sending to a single server
             0
@@ -650,6 +645,14 @@ impl PacketManager {
 
     fn update_new_senders(&mut self) {
         let mut new_send_stream_lock = self.new_send_streams.blocking_write();
+        if !new_send_stream_lock.is_empty() {
+            let mut new_send_streams_vec = std::mem::take(&mut *new_send_stream_lock);
+            self.send_streams.append(&mut new_send_streams_vec);
+        }
+    }
+
+    async fn async_update_new_senders(&mut self) {
+        let mut new_send_stream_lock = self.new_send_streams.write().await;
         if !new_send_stream_lock.is_empty() {
             let mut new_send_streams_vec = std::mem::take(&mut *new_send_stream_lock);
             self.send_streams.append(&mut new_send_streams_vec);
@@ -686,9 +689,17 @@ impl PacketManager {
     
     fn validate_for_send<T: Packet + 'static>(&self) -> Result<(), SendError> {
         if self.has_more_than_one_remote() {
-            return Err(SendError::new(format!("async_send()/send() was called for packet {}, but there is more than one client.  Did you mean to call async_broadcast()/broadcast()?", type_name::<T>())))
+            return Err(SendError::new(format!("send() was called for packet {}, but there is more than one client.  Did you mean to call broadcast()?", type_name::<T>())))
         }
         
+        Ok(())
+    }
+
+    async fn async_validate_for_send<T: Packet + 'static>(&self) -> Result<(), SendError> {
+        if self.async_has_more_than_one_remote().await {
+            return Err(SendError::new(format!("async_send() was called for packet {}, but there is more than one client.  Did you mean to call async_broadcast()?", type_name::<T>())))
+        }
+
         Ok(())
     }
     
@@ -728,6 +739,11 @@ impl PacketManager {
     fn has_more_than_one_remote(&self) -> bool {
         self.server_connection.is_none() && self.client_connections.blocking_read().len() > 1
     }
+
+    #[inline]
+    async fn async_has_more_than_one_remote(&self) -> bool {
+        self.server_connection.is_none() && self.client_connections.read().await.len() > 1
+    }
 }
 
 #[cfg(test)]
@@ -756,6 +772,7 @@ mod tests {
     }
 
     // TODO: Test sync versions
+    // TODO: flaky, need to validate entire packet sequence likek tests below or race condition can happen and validations fail
     #[tokio::test]
     async fn receive_packet_e2e_async() {
         let mut manager = PacketManager::new_for_async();
