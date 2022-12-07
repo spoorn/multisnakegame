@@ -6,6 +6,7 @@ use crate::common::components::Direction;
 
 #[bincode_packet]
 pub struct StartNewGameAck {
+    pub client_id: u8,
     pub num_snakes: u8
 }
 

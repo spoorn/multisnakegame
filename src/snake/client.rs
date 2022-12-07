@@ -10,7 +10,7 @@ use crate::networking::client_packets::{Ready, SnakeMovement};
 use crate::networking::server_packets::{SnakePositions, SnakePositionsPacketBuilder, SpawnSnake, SpawnSnakePacketBuilder, SpawnTail, SpawnTailPacketBuilder, StartNewGameAck, StartNewGameAckPacketBuilder};
 use crate::snake::{spawn_snake, spawn_tail};
 use crate::snake::components::{SnakeHead, SnakeState};
-use crate::snake::resources::{NumSnakesToSpawn, SnakeId};
+use crate::snake::resources::{ClientId, NumSnakesToSpawn, SnakeId};
 use crate::state::GameState;
 
 pub struct SnakeClientPlugin;
@@ -23,16 +23,17 @@ impl Plugin for SnakeClientPlugin {
             .add_system(pre_game.run_in_state(GameState::PreGame))
             .add_system(update_snake_positions.run_in_state(GameState::Running).label(SnakeState::Movement))
             .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
-            //.add_system(handle_spawn_tail.run_in_state(GameState::Running).before(SnakeState::Movement));
     }
 }
 
 fn wait_for_ack(mut commands: Commands, mut manager: ResMut<ClientPacketManager>) {
     let ack = manager.manager.received::<StartNewGameAck, StartNewGameAckPacketBuilder>(false).unwrap();
+    // TODO: Validate only one ack received
     if let Some(ack) = ack {
         if !ack.is_empty() {
             info!("[client] Got StartNewGameAck from server, with expected number of snakes={}", ack[0].num_snakes);
             commands.insert_resource(NumSnakesToSpawn { num: ack[0].num_snakes as i32 });
+            commands.insert_resource(ClientId { id: ack[0].client_id });
             commands.insert_resource(NextState(GameState::PreGame));
         }
     }
@@ -108,23 +109,26 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
     }
 }
 
-fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mut SnakeHead>, mut manager: ResMut<ClientPacketManager>) {
-    // TODO: only control self
+fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mut SnakeHead>, mut manager: ResMut<ClientPacketManager>, client_id: Res<ClientId>) {
     for mut head in head_positions.iter_mut() {
-        let dir: Direction = if keys.pressed(KeyCode::Left) {
-            Direction::Left
-        } else if keys.pressed(KeyCode::Down) {
-            Direction::Down
-        } else if keys.pressed(KeyCode::Up) {
-            Direction::Up
-        } else if keys.pressed(KeyCode::Right) {
-            Direction::Right
-        } else {
-            head.input_direction
-        };
-        if dir != head.direction.opposite() && dir != head.input_direction {
-            head.input_direction = dir;
-            manager.manager.send(SnakeMovement { id: head.id, direction: head.input_direction }).unwrap();
+        if head.id == client_id.id {
+            let dir: Direction = if keys.pressed(KeyCode::Left) {
+                Direction::Left
+            } else if keys.pressed(KeyCode::Down) {
+                Direction::Down
+            } else if keys.pressed(KeyCode::Up) {
+                Direction::Up
+            } else if keys.pressed(KeyCode::Right) {
+                Direction::Right
+            } else {
+                head.input_direction
+            };
+            if dir != head.direction.opposite() && dir != head.input_direction {
+                head.input_direction = dir;
+                manager.manager.send(SnakeMovement { id: head.id, direction: head.input_direction }).unwrap();
+            }
+            
+            break;
         }
     }
 }

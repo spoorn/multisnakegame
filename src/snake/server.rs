@@ -10,8 +10,8 @@ use crate::common::correct_position_at_ends;
 use crate::networking::client_packets::{SnakeMovement, SnakeMovementPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
 use crate::networking::server_packets::{SnakePosition, SnakePositions, SpawnSnake, StartNewGameAck};
 use crate::server::resources::{ServerInfo, ServerPacketManager};
-use crate::snake::components::{SnakeHead, SnakeState};
 use crate::snake::{move_snake, spawn_snake};
+use crate::snake::components::{SnakeHead, SnakeState};
 use crate::snake::resources::SnakeId;
 use crate::state::GameState;
 
@@ -45,7 +45,8 @@ fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPac
             let b = thread_rng().gen_range(0.1..=1.0) as f32;
             info!("[server] Spawned snake at {}, {}", x, y);
             spawn_snake(&mut commands, snake_id.id, Position { x, y }, Color::rgb(r, g, b));
-            manager.manager.send_to(addr, StartNewGameAck { num_snakes: server_info.want_num_clients }).unwrap();
+            let client_id = manager.get_client_id(addr) as u8;
+            manager.manager.send_to(addr, StartNewGameAck { client_id, num_snakes: server_info.want_num_clients }).unwrap();
             // TODO: This can probably be optimized rather than broadcasting to all clients everytime, but this is simple
             // Previously spawned snakes.  Assumes client handles duplicates
             for (pos, head) in q.iter() {
@@ -59,19 +60,23 @@ fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPac
 
 fn update_snake_movement(mut head_positions: Query<&mut SnakeHead>, mut manager: ResMut<ServerPacketManager>) {
     let snake_movements = manager.manager.received_all::<SnakeMovement, SnakeMovementPacketBuilder>(false).unwrap();
-    for (_addr, movements) in snake_movements.iter() {
+    for (addr, movements) in snake_movements.iter() {
         if let Some(movements) = movements {
             let mut snakes = HashMap::new();
             for head in head_positions.iter_mut() {
                 snakes.insert(head.id, head);
             }
+            let client_id = manager.get_client_id(addr) as u8;
 
-            // TODO: check which snake to move
             for movement in movements.iter() {
-                let snake = snakes.get_mut(&movement.id).unwrap();
-                let dir = movement.direction;
-                if dir != snake.direction.opposite() {
-                    snake.input_direction = dir;
+                if movement.id == client_id {
+                    let snake = snakes.get_mut(&movement.id).unwrap();
+                    let dir = movement.direction;
+                    if dir != snake.direction.opposite() {
+                        snake.input_direction = dir;
+                    }
+                } else {
+                    warn!("[server] Client {} with ID={} send SnakeMovement with another client's ID={}... ignoring packet", addr, client_id, movement.id);   
                 }
             }
         }

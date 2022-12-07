@@ -680,6 +680,10 @@ impl PacketManager {
         self.client_connections.blocking_read().len() as u32
     }
     
+    pub fn get_client_id<S: Into<String>>(&self, addr: S) -> u32 {
+        self.client_connections.blocking_read().get(&addr.into()).unwrap().0
+    }
+    
     fn validate_for_send<T: Packet + 'static>(&self) -> Result<(), SendError> {
         if self.has_more_than_one_remote() {
             return Err(SendError::new(format!("async_send()/send() was called for packet {}, but there is more than one client.  Did you mean to call async_broadcast()/broadcast()?", type_name::<T>())))
