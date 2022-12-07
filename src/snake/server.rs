@@ -84,7 +84,6 @@ fn snake_movement(
     mut head_positions: Query<(&mut Position, &mut SnakeHead)>,
     mut positions: Query<&mut Position, Without<SnakeHead>>,
 ) {
-    info!("Snake Movement");
     let mut snake_positions = vec![];
     for (mut position, mut head) in head_positions.iter_mut() {
         let moved = move_snake(time.delta(), position.as_mut(), head.as_mut(), &mut positions);

@@ -17,7 +17,7 @@ pub struct ServerPlugin {
 impl Plugin for ServerPlugin {
 
     fn build(&self, app: &mut App) {
-        app.insert_resource(ServerInfo { server_addr: self.server_addr.to_owned(), want_num_clients: 1 })
+        app.insert_resource(ServerInfo { server_addr: self.server_addr.to_owned(), want_num_clients: 2 })
             .insert_resource(ReadyCount { count: 0 })
             .add_startup_system(setup_packet_manager)
             .add_loopless_state(GameState::MainMenu)

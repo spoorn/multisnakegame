@@ -6,7 +6,6 @@ use components::Size;
 use crate::common::components::Position;
 use crate::common::constants::{ARENA_HEIGHT, ARENA_WIDTH};
 use crate::snake::components::SnakeHead;
-use crate::state::GameState;
 
 pub mod components;
 pub mod constants;
@@ -17,10 +16,9 @@ pub struct CommonPlugin {
 
 impl Plugin for CommonPlugin {
     fn build(&self, app: &mut App) {
-        app.add_startup_system(setup_camera);
-
         if self.is_client {
-            app.add_system_set_to_stage(
+            app.add_startup_system(setup_camera)
+                .add_system_set_to_stage(
                 CoreStage::PostUpdate,
                 ConditionSet::new()
                     .with_system(position_translation)

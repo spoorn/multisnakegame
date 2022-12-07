@@ -21,3 +21,4 @@ dashmap = "5.4.0"
 networking-macros = { path = "../networking-macros" }
 bincode = "1.3.3"
 serde = { version = "1.0", features = ["derive"] }
+log = "0.4.17"

@@ -83,12 +83,6 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
 
                         let client_tail_len = head.tail.len();
                         let server_tail_len = orientation.tail_positions.len();
-                        // The client can have 1 more tail if it receives the SpawnTail packet before the server has finished
-                        // the tick, but it should never be 2 more tails than the server
-                        if client_tail_len > server_tail_len + 1 {
-                            panic!("Client spawned more tails {} than server has record of {}.  This should not happen!  \
-                            Most likely means there is desync between client and server, or the server spawned multiple tails in one tick.", client_tail_len, server_tail_len);
-                        }
 
                         // Only modify the old tail positions, new ones should already be in the right place
                         for (i, entity) in head.tail.iter().enumerate() {
@@ -100,7 +94,7 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
                             tail_pos.y = orientation.tail_positions[i].1;
                         }
 
-                        // Tail was spawned on server side, spawn on client as well
+                        // Tails were spawned on server side, spawn on client as well
                         // TODO: instead we can just spawn tails manually above to avoid lag, and remove SpawnTail packet,
                         if client_tail_len < server_tail_len {
                             // This is a blocking call
@@ -135,7 +129,7 @@ fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mu
 }
 
 fn handle_spawn_tail(mut commands: &mut Commands, mut manager: &mut ClientPacketManager) -> Vec<Entity> {
-    let spawn_tails = manager.manager.received::<SpawnTail, SpawnTailPacketBuilder>(true).unwrap();
+    let spawn_tails = manager.manager.received::<SpawnTail, SpawnTailPacketBuilder>(false).unwrap();
     let mut tail_entities = vec![];
     if let Some(spawn_tails) = spawn_tails {
         for st in spawn_tails.iter() {

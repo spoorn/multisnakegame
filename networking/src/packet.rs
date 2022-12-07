@@ -8,6 +8,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use derive_more::Display;
 use hashbrown::HashMap;
+use log::trace;
 use quinn::{Connection, RecvStream, SendStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
@@ -55,12 +56,14 @@ pub struct PacketManager {
     receive_packets: BiMap<u32, TypeId>,
     send_packets: BiMap<u32, TypeId>,
     recv_packet_builders: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    send_streams: Arc<RwLock<Vec<(String, DashMap<u32, SendStream>)>>>,
-    rx: Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>,
+    send_streams: Vec<(String, HashMap<u32, RwLock<SendStream>>)>,
+    rx: Vec<(String, HashMap<u32, (RwLock<Receiver<Bytes>>, JoinHandle<()>)>)>,
+    new_send_streams: Arc<RwLock<Vec<(String, HashMap<u32, RwLock<SendStream>>)>>>,
+    new_rxs: Arc<RwLock<Vec<(String, HashMap<u32, (RwLock<Receiver<Bytes>>, JoinHandle<()>)>)>>>,
     // Endpoint and Connection structs moved to the struct fields to prevent closing connections
     // by dropping.
     // Client addr to (index in above Vecs AKA a client ID, Connection)
-    client_connections: Arc<DashMap<String, (u32, Connection)>>,
+    client_connections: Arc<RwLock<HashMap<String, (u32, Connection)>>>,
     server_connection: Option<Connection>,
     next_receive_id: u32,
     next_send_id: u32,
@@ -82,9 +85,11 @@ impl PacketManager {
                     receive_packets: BiMap::new(),
                     send_packets: BiMap::new(),
                     recv_packet_builders: HashMap::new(),
-                    send_streams: Arc::new(RwLock::new(vec![])),
-                    rx: Arc::new(RwLock::new(vec![])),
-                    client_connections: Arc::new(DashMap::new()),
+                    send_streams: Vec::new(),
+                    rx: Vec::new(),
+                    new_send_streams: Arc::new(RwLock::new(vec![])),
+                    new_rxs: Arc::new(RwLock::new(Vec::new())),
+                    client_connections: Arc::new(RwLock::new(HashMap::new())),
                     server_connection: None,
                     next_receive_id: 0,
                     next_send_id: 0,
@@ -102,9 +107,11 @@ impl PacketManager {
             receive_packets: BiMap::new(),
             send_packets: BiMap::new(),
             recv_packet_builders: HashMap::new(),
-            send_streams: Arc::new(RwLock::new(vec![])),
-            rx: Arc::new(RwLock::new(vec![])),
-            client_connections: Arc::new(DashMap::new()),
+            send_streams: Vec::new(),
+            rx: Vec::new(),
+            new_send_streams: Arc::new(RwLock::new(vec![])),
+            new_rxs: Arc::new(Default::default()),
+            client_connections: Arc::new(RwLock::new(HashMap::new())),
             server_connection: None,
             next_receive_id: 0,
             next_send_id: 0,
@@ -121,7 +128,7 @@ impl PacketManager {
                 self.validate_connection_prereqs(num_incoming_streams, num_outgoing_streams)?;
                 // TODO: this isn't so great, we can refactor to create static methods that don't require mutable ref to self, and use those instead later on
                 runtime.block_on(PacketManager::async_init_connections_helper(is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr,
-                                                                                        wait_for_clients, expected_num_clients, &self.runtime, &self.send_streams, &self.rx,
+                                                                                        wait_for_clients, expected_num_clients, &self.runtime, &self.new_send_streams, &self.new_rxs,
                                                                                         &self.client_connections, &mut self.server_connection))
             }
         }
@@ -133,7 +140,7 @@ impl PacketManager {
         }
         self.validate_connection_prereqs(num_incoming_streams, num_outgoing_streams)?;
         PacketManager::async_init_connections_helper(is_server, num_incoming_streams, num_outgoing_streams, server_addr, client_addr, 
-                                                     wait_for_clients, expected_num_clients, &self.runtime, &self.send_streams, &self.rx, 
+                                                     wait_for_clients, expected_num_clients, &self.runtime, &self.new_send_streams, &self.new_rxs, 
                                                      &self.client_connections, &mut self.server_connection).await
     }
     
@@ -153,9 +160,9 @@ impl PacketManager {
     async fn async_init_connections_helper<S: Into<String>>(is_server: bool, num_incoming_streams: u32, num_outgoing_streams: u32, 
                                                             server_addr: S, mut client_addr: Option<S>, wait_for_clients: u32, 
                                                             expected_num_clients: Option<u32>, runtime: &Arc<Option<Runtime>>,
-                                                            send_streams: &Arc<RwLock<Vec<(String, DashMap<u32, SendStream>)>>>,
-                                                            rx: &Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>,
-                                                            client_connections: &Arc<DashMap<String, (u32, Connection)>>,
+                                                            new_send_streams: &Arc<RwLock<Vec<(String, HashMap<u32, RwLock<SendStream>>)>>>,
+                                                            new_rxs: &Arc<RwLock<Vec<(String, HashMap<u32, (RwLock<Receiver<Bytes>>, JoinHandle<()>)>)>>>,
+                                                            client_connections: &Arc<RwLock<HashMap<String, (u32, Connection)>>>,
                                                             server_connection: &mut Option<Connection>) -> Result<(), Box<dyn Error>> {
         // if expected_num_accepts_uni != self.next_receive_id {
         //     return Err(Box::new(ConnectionError::new("expected_num_accepts_uni does not match number of registered receive packets")));
@@ -179,21 +186,21 @@ impl PacketManager {
                 let incoming_conn = endpoint.accept().await.unwrap();
                 let conn = incoming_conn.await.unwrap();
                 let addr = conn.remote_address();
-                if client_connections.contains_key(&addr.to_string()) {
+                if client_connections.read().await.contains_key(&addr.to_string()) {
                     panic!("Client with addr={} was already connected", addr);
                 }
                 println!("[server] connection accepted: addr={}", conn.remote_address());
                 let (server_send_streams, recv_streams) = PacketManager::open_streams_for_connection(addr.to_string(), &conn, num_incoming_streams, num_outgoing_streams).await?;
                 let res = PacketManager::spawn_receive_thread(&addr.to_string(), recv_streams, runtime.as_ref()).unwrap();
-                rx.write().await.push((addr.to_string(), res));
-                send_streams.write().await.push((addr.to_string(), server_send_streams));
-                client_connections.insert(addr.to_string(), (i, conn));
+                new_rxs.write().await.push((addr.to_string(), res));
+                new_send_streams.write().await.push((addr.to_string(), server_send_streams));
+                client_connections.write().await.insert(addr.to_string(), (i, conn));
             }
             
             if expected_num_clients.is_none() || expected_num_clients.unwrap() > wait_for_clients {
                 let client_connections = client_connections.clone();
-                let mut arc_send_streams = send_streams.clone();
-                let mut arc_rx = rx.clone();
+                let mut arc_send_streams = new_send_streams.clone();
+                let mut arc_rx = new_rxs.clone();
                 let arc_runtime = Arc::clone(runtime);
                 let mut client_id = wait_for_clients;
                 let accept_client_task = async move {
@@ -204,7 +211,7 @@ impl PacketManager {
                                 let incoming_conn = endpoint.accept().await.unwrap();
                                 let conn = incoming_conn.await.unwrap();
                                 let addr = conn.remote_address();
-                                if client_connections.contains_key(&addr.to_string()) {
+                                if client_connections.read().await.contains_key(&addr.to_string()) {
                                     panic!("Client with addr={} was already connected", addr);
                                 }
                                 println!("[server] connection accepted: addr={}", conn.remote_address());
@@ -212,7 +219,7 @@ impl PacketManager {
                                 let res = PacketManager::spawn_receive_thread(&addr.to_string(), recv_streams, arc_runtime.as_ref()).unwrap();
                                 arc_rx.write().await.push((addr.to_string(), res));
                                 arc_send_streams.write().await.push((addr.to_string(), send_streams));
-                                client_connections.insert(addr.to_string(), (client_id, conn));
+                                client_connections.write().await.insert(addr.to_string(), (client_id, conn));
                                 client_id += 1;
                             }
                         }
@@ -222,7 +229,7 @@ impl PacketManager {
                                 let incoming_conn = endpoint.accept().await.unwrap();
                                 let conn = incoming_conn.await.unwrap();
                                 let addr = conn.remote_address();
-                                if client_connections.contains_key(&addr.to_string()) {
+                                if client_connections.read().await.contains_key(&addr.to_string()) {
                                     panic!("Client with addr={} was already connected", addr);
                                 }
                                 println!("[server] connection accepted: addr={}", conn.remote_address());
@@ -230,7 +237,7 @@ impl PacketManager {
                                 let res = PacketManager::spawn_receive_thread(&addr.to_string(), recv_streams, arc_runtime.as_ref()).unwrap();
                                 arc_rx.write().await.push((addr.to_string(), res));
                                 arc_send_streams.write().await.push((addr.to_string(), send_streams));
-                                client_connections.insert(addr.to_string(), (client_id, conn));
+                                client_connections.write().await.insert(addr.to_string(), (client_id, conn));
                                 client_id += 1;
                             }
                         }
@@ -258,17 +265,17 @@ impl PacketManager {
             println!("[client] connected: addr={}", addr);
             let (client_send_streams, recv_streams) = PacketManager::open_streams_for_connection(addr.to_string(), &conn, num_incoming_streams, num_outgoing_streams).await?;
             let res = PacketManager::spawn_receive_thread(&addr.to_string(), recv_streams, runtime.as_ref()).unwrap();
-            rx.write().await.push((addr.to_string(), res));
-            send_streams.write().await.push((addr.to_string(), client_send_streams));
+            new_rxs.write().await.push((addr.to_string(), res));
+            new_send_streams.write().await.push((addr.to_string(), client_send_streams));
             let _ = server_connection.insert(conn);
         }
             
         Ok(())
     }
     
-    async fn open_streams_for_connection(addr: String, conn: &Connection, num_incoming_streams: u32, num_outgoing_streams: u32) -> Result<(DashMap<u32, SendStream>, DashMap<u32, RecvStream>), Box<dyn Error>> {
-        let mut send_streams = DashMap::new();
-        let mut recv_streams = DashMap::new();
+    async fn open_streams_for_connection(addr: String, conn: &Connection, num_incoming_streams: u32, num_outgoing_streams: u32) -> Result<(HashMap<u32, RwLock<SendStream>>, HashMap<u32, RecvStream>), Box<dyn Error>> {
+        let mut send_streams = HashMap::new();
+        let mut recv_streams = HashMap::new();
         // Note: Packets are not sent immediately upon the write.  The thread needs to be kept
         // open so that the packets can actually be sent over the wire to the client.
         for i in 0..num_outgoing_streams {
@@ -278,7 +285,7 @@ impl PacketManager {
                 .await?;
             println!("Writing packet to {} for packet id {}", addr, i);
             send_stream.write_u32(i).await?;
-            send_streams.insert(i, send_stream);
+            send_streams.insert(i, RwLock::new(send_stream));
         }
 
         for i in 0..num_incoming_streams {
@@ -297,8 +304,8 @@ impl PacketManager {
         Ok((send_streams, recv_streams))
     }
     
-    fn spawn_receive_thread<S: Into<String>>(addr: S, recv_streams: DashMap<u32, RecvStream>, runtime: &Option<Runtime>) -> Result<DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>, Box<dyn Error>> {
-        let mut rxs = DashMap::new();
+    fn spawn_receive_thread<S: Into<String>>(addr: S, recv_streams: HashMap<u32, RecvStream>, runtime: &Option<Runtime>) -> Result<HashMap<u32, (RwLock<Receiver<Bytes>>, JoinHandle<()>)>, Box<dyn Error>> {
+        let mut rxs = HashMap::new();
         println!("Spawning receive thread for addr={} for {} ids", addr.into(), recv_streams.len());
         for (id, mut recv_stream) in recv_streams.into_iter() {
             let (tx, rx) = mpsc::channel(100);
@@ -324,11 +331,12 @@ impl PacketManager {
                                 }
                                 Some(part) => {
                                     bytes = Bytes::from([part, chunk.bytes].concat());
+                                    trace!("Concatenated saved part and chunked packet: {:?}", bytes);
                                 }
                             }
 
                             // TODO: Make trace log
-                            println!("Received bytes: {:?}", bytes);
+                            trace!("Received bytes: {:?}", bytes);
                             let boundaries: Vec<usize> = bytes.windows(FRAME_BOUNDARY.len()).enumerate().filter(|(_, w)| matches!(*w, FRAME_BOUNDARY)).map(|(i, _)| i).collect();
                             let mut offset = 0;
                             for i in boundaries.iter() {
@@ -384,7 +392,7 @@ impl PacketManager {
                 }
             };
 
-            rxs.insert(id, (rx, receive_thread));
+            rxs.insert(id, (RwLock::new(rx), receive_thread));
         }
         
         Ok(rxs)
@@ -410,14 +418,26 @@ impl PacketManager {
     
     pub fn received_all<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Vec<(String, Option<Vec<T>>)>, ReceiveError> {
         self.validate_for_received::<T>(true)?;
+        self.update_new_receivers();
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
             }
             Some(runtime) => {
                 runtime.block_on(async {
-                    let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
-                    for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
+                    // let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
+                    // let mut addr_and_recv_indices = Vec::new();
+                    // 
+                    // // Grab values out so we don't lock the receivers
+                    // for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
+                    //     addr_and_recv_indices.push((addr.to_string(), recv_index));
+                    // }
+                    // 
+                    // for (addr, recv_index) in addr_and_recv_indices.into_iter() {
+                    //     res.push((addr, PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
+                    // }
+                    let mut res = vec![];
+                    for (recv_index, (addr, _rx_map)) in self.rx.iter().enumerate() {
                         res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
                     }
                     Ok(res)
@@ -432,8 +452,20 @@ impl PacketManager {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
         }
         self.validate_for_received::<T>(true)?;
-        let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
-        for (recv_index, (addr, _rx)) in self.rx.read().await.iter().enumerate() {
+        self.update_new_receivers();
+        // let mut res: Vec<(String, Option<Vec<T>>)> = vec![];
+        // let mut addr_and_recv_indices = Vec::new();
+        // 
+        // // Grab values out so we don't lock the receivers
+        // for (recv_index, (addr, _rx)) in self.rx.clone().read().await.iter().enumerate() {
+        //     addr_and_recv_indices.push((addr.to_string(), recv_index));
+        // }
+        // 
+        // for (addr, recv_index) in addr_and_recv_indices.into_iter() {
+        //     res.push((addr, PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
+        // }
+        let mut res = vec![];
+        for (recv_index, (addr, _rx_map)) in self.rx.iter().enumerate() {
             res.push((addr.to_string(), PacketManager::async_received_helper::<T, U>(blocking, recv_index, &self.receive_packets, &self.recv_packet_builders, &self.rx).await?));
         }
         Ok(res)
@@ -441,6 +473,7 @@ impl PacketManager {
 
     pub fn received<T: Packet + 'static, U: PacketBuilder<T> + 'static>(&mut self, blocking: bool) -> Result<Option<Vec<T>>, ReceiveError> {
         self.validate_for_received::<T>(false)?;
+        self.update_new_receivers();
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
@@ -456,22 +489,25 @@ impl PacketManager {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_received(), make sure you create the PacketManager using new_async(), not new()");
         }
         self.validate_for_received::<T>(false)?;
+        self.update_new_receivers();
         PacketManager::async_received_helper::<T, U>(blocking, 0, &self.receive_packets, &self.recv_packet_builders, &self.rx).await
     }
     
     // Assumes does not have more than one client to send to, should be checked by callers
+    // TODO: WARN ABOUT BLOCKING, can hang server if you get packets in order you don't expect!
     async fn async_received_helper<T: Packet + 'static, U: PacketBuilder<T> + 'static>(blocking: bool, recv_index: usize,
                                                                                        receive_packets: &BiMap<u32, TypeId>,
                                                                                        recv_packet_builders: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-                                                                                       rx: &Arc<RwLock<Vec<(String, DashMap<u32, (Receiver<Bytes>, JoinHandle<()>)>)>>>
+                                                                                       rxs: &Vec<(String, HashMap<u32, (RwLock<Receiver<Bytes>>, JoinHandle<()>)>)>
     ) -> Result<Option<Vec<T>>, ReceiveError> {
-        if rx.read().await.len() <= recv_index {
+        if rxs.len() <= recv_index {
             return Err(ReceiveError::new(format!("Could not find receiver stream for recv index={}.  Did you forget to call init_connections()?  Or there might be no clients connected yet.", recv_index)));
         }
         let packet_type_id = TypeId::of::<T>();
         let id = receive_packets.get_by_right(&packet_type_id).unwrap();
-        let (addr, rxs) = &rx.read().await[recv_index];
-        let rx = &mut rxs.get_mut(id).unwrap().0;
+        let (addr, rx_map) = rxs.get(recv_index).unwrap();
+        let (rx_lock, _receive_thread) = rx_map.get(id).unwrap();
+        let mut rx = rx_lock.write().await;
         let mut res: Vec<T> = Vec::new();
         let packet_builder: &U = recv_packet_builders.get(&TypeId::of::<T>()).unwrap().downcast_ref::<U>().unwrap();
         
@@ -505,7 +541,7 @@ impl PacketManager {
         if res.is_empty() {
             return Ok(None);
         }
-        println!("Fetched {} received packets of type={}, id={}, for addr={}", res.len(), type_name::<T>(), id, addr);
+        println!("Fetched {} received packets of type={}, id={}, from addr={}", res.len(), type_name::<T>(), id, addr);
         Ok(Some(res))
     }
     
@@ -517,15 +553,25 @@ impl PacketManager {
         self.validate_packet_was_registered::<T>(false)?;
         Ok(None)
     }
-
+    
+    fn update_new_receivers(&mut self) {
+        let mut new_rx_lock = self.new_rxs.blocking_write();
+        if !new_rx_lock.is_empty() {
+            let mut new_rx_vec = std::mem::take(&mut *new_rx_lock);
+            self.rx.append(&mut new_rx_vec);
+        }
+    }
+    
     pub fn broadcast<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
+        self.update_new_senders();
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
             }
             Some(runtime) => {
                 runtime.block_on(async {
-                    for send_index in 0..self.send_streams.clone().read().await.len() {
+                    let send_streams_len = self.send_streams.len();
+                    for send_index in 0..send_streams_len {
                         PacketManager::async_send_helper::<T>(&packet, send_index, &self.send_packets, &self.send_streams).await?;
                     }
                     Ok(())
@@ -538,7 +584,9 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
-        for send_index in 0..self.send_streams.read().await.len() {
+        self.update_new_senders();
+        let send_streams_len = self.send_streams.len();
+        for send_index in 0..send_streams_len {
             PacketManager::async_send_helper::<T>(&packet, send_index, &self.send_packets, &self.send_streams).await?;
         }
         Ok(())
@@ -546,6 +594,7 @@ impl PacketManager {
 
     pub fn send<T: Packet + 'static>(&mut self, packet: T) -> Result<(), SendError> {
         self.validate_for_send::<T>()?;
+        self.update_new_senders();
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
@@ -561,10 +610,12 @@ impl PacketManager {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
         self.validate_for_send::<T>()?;
+        self.update_new_senders();
         PacketManager::async_send_helper::<T>(&packet, 0, &self.send_packets, &self.send_streams).await
     }
 
     pub fn send_to<T: Packet + 'static>(&mut self, addr: impl Into<String>, packet: T) -> Result<(), SendError> {
+        self.update_new_senders();
         match self.runtime.as_ref() {
             None => {
                 panic!("PacketManager does not have a runtime instance associated with it.  Did you mean to call async_received()?");
@@ -575,7 +626,7 @@ impl PacketManager {
                     0
                 } else {
                     // Else, we're a server and we need to fetch the client id or index
-                    self.client_connections.get(&addr.into()).unwrap().value().0
+                    self.client_connections.blocking_read().get(&addr.into()).unwrap().0
                 };
                 runtime.block_on(PacketManager::async_send_helper::<T>(&packet, send_index as usize, &self.send_packets, &self.send_streams))
             }
@@ -586,36 +637,47 @@ impl PacketManager {
         if self.runtime.is_some() {
             panic!("PacketManager has a runtime instance associated with it.  If you are using async_send(), make sure you create the PacketManager using new_async(), not new()");
         }
+        self.update_new_senders();
         let send_index = if self.server_connection.is_some() {
             // We are the client sending to a single server
             0
         } else {
             // Else, we're a server and we need to fetch the client id or index
-            self.client_connections.get(&addr.into()).unwrap().value().0
+            self.client_connections.read().await.get(&addr.into()).unwrap().0
         };
         PacketManager::async_send_helper::<T>(&packet, send_index as usize, &self.send_packets, &self.send_streams).await
     }
+
+    fn update_new_senders(&mut self) {
+        let mut new_send_stream_lock = self.new_send_streams.blocking_write();
+        if !new_send_stream_lock.is_empty() {
+            let mut new_send_streams_vec = std::mem::take(&mut *new_send_stream_lock);
+            self.send_streams.append(&mut new_send_streams_vec);
+        }
+    }
     
     async fn async_send_helper<T: Packet + 'static>(packet: &T, send_index: usize, send_packets: &BiMap<u32, TypeId>,
-                                                    send_streams: &Arc<RwLock<Vec<(String, DashMap<u32, SendStream>)>>>,) -> Result<(), SendError> {
-        if send_streams.read().await.len() <= send_index {
+                                                    send_streams: &Vec<(String, HashMap<u32, RwLock<SendStream>>)>,) -> Result<(), SendError> {
+        if send_streams.len() <= send_index {
             return Err(SendError::new(format!("Could not find send stream for client index={}.  Did you forget to call init_connections()?  Or there might be no clients connected yet.", send_index)));
         }
         let bytes = packet.as_bytes();
         let packet_type_id = TypeId::of::<T>();
         let id = send_packets.get_by_right(&packet_type_id).unwrap();
-        let (addr, send_streams) = &send_streams.read().await[send_index];
-        let mut send_stream = send_streams.get_mut(id).unwrap();
+        let (addr, send_streams) = &send_streams[send_index];
+        let mut send_stream = send_streams.get(id).unwrap().write().await;
         // TODO: Make trace log
-        println!("Sending bytes to {}: {:?}", addr, bytes);
+        println!("Sending bytes to {} with len {}", addr, bytes.len());
+        trace!("Sending bytes {:?}", bytes);
         send_stream.write_chunk(bytes).await.unwrap();
+        trace!("Sending FRAME_BOUNDARY");
         send_stream.write_all(FRAME_BOUNDARY).await.unwrap();
         println!("Sent packet to {} with id={}, type={}", addr, id, type_name::<T>());
         Ok(())
     }
     
     pub fn get_num_clients(&self) -> u32 {
-        self.client_connections.len() as u32
+        self.client_connections.blocking_read().len() as u32
     }
     
     fn validate_for_send<T: Packet + 'static>(&self) -> Result<(), SendError> {
@@ -660,7 +722,7 @@ impl PacketManager {
     // Either we are a single client talking to a single server, or a server talking to potentially multiple clients
     #[inline]
     fn has_more_than_one_remote(&self) -> bool {
-        self.server_connection.is_none() && self.client_connections.len() > 1
+        self.server_connection.is_none() && self.client_connections.blocking_read().len() > 1
     }
 }
 
