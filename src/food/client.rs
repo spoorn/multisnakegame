@@ -5,7 +5,7 @@ use crate::client::resources::ClientPacketManager;
 use crate::common::components::Position;
 use crate::food::{get_food_positions, spawn_food};
 use crate::food::components::Food;
-use crate::food::resources::FoodId;
+use crate::food::resources::{FoodId, ToEatfood};
 use crate::networking::server_packets::{EatFood, EatFoodPacketBuilder, SpawnFood, SpawnFoodPacketBuilder};
 use crate::snake::components::SnakeState;
 use crate::state::GameState;
@@ -14,7 +14,7 @@ pub struct FoodClientPlugin;
 impl Plugin for FoodClientPlugin {
 
     fn build(&self, app: &mut App) {
-        app
+        app.insert_resource(ToEatfood { positions: Vec::new() })
             .add_system_set_to_stage(CoreStage::PreUpdate,
                                      ConditionSet::new()
                                          .run_in_state(GameState::Running)
@@ -46,17 +46,36 @@ fn handle_spawn_food(mut manager: ResMut<ClientPacketManager>,
     }
 }
 
-fn handle_eat_food(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, foods: Query<(Entity, &Position), With<Food>>) {
+fn handle_eat_food(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mut to_eat: ResMut<ToEatfood>, foods: Query<(Entity, &Position), With<Food>>) {
+    // TODO: optimize
+    let mut pos_to_food;
+    
     let eat_foods = manager.manager.received::<EatFood, EatFoodPacketBuilder>(false).unwrap();
-    if let Some(eat_foods) = eat_foods {
-        let mut pos_to_food = get_food_positions(foods);
-        for eat_food in eat_foods.iter() {
-            let position = Position { x: eat_food.position.0, y: eat_food.position.1 };
-            info!("[client] Ate food at {:?}", position);
-            if let Some(entity) = pos_to_food.get(&position) {
-                commands.entity(*entity).despawn();
-            } else {
-                warn!("Received EatFood packet for position={:?}, but did not find food there", position);
+    let has_to_eat = !to_eat.positions.is_empty();
+    if eat_foods.is_some() || has_to_eat {
+        pos_to_food = get_food_positions(foods);
+
+        if has_to_eat {
+            to_eat.positions.retain(|pos| {
+                if let Some(entity) = pos_to_food.get(pos) {
+                    commands.entity(*entity).despawn();
+                    info!("[client] Later ate food at {:?}", pos);
+                    return true;
+                }
+                false
+            });
+        }
+        
+        if let Some(eat_foods) = eat_foods {
+            for eat_food in eat_foods.iter() {
+                let position = Position { x: eat_food.position.0, y: eat_food.position.1 };
+                if let Some(entity) = pos_to_food.get(&position) {
+                    commands.entity(*entity).despawn();
+                    info!("[client] Ate food at {:?}", position);
+                } else {
+                    warn!("Received EatFood packet for position={:?}, but did not find food there.  Queueing for next tick", position);
+                    to_eat.positions.push(position);
+                }
             }
         }
     }

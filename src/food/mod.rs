@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 
-use networking::packet::PacketManager;
+use durian::PacketManager;
 
 use crate::common::components::Position;
 use crate::common::components::Size;

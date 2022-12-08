@@ -1,5 +1,5 @@
 use std::ops::{Deref, DerefMut};
-use networking::packet::PacketManager;
+use durian::PacketManager;
 
 pub struct ServerInfo {
     pub server_addr: String,

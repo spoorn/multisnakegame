@@ -1,9 +1,8 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
+use durian::PacketManager;
 use iyes_loopless::prelude::{AppLooplessStateExt, IntoConditionalSystem};
 use iyes_loopless::state::NextState;
-
-use networking::packet::{PacketManager, ReceiveError};
 
 use crate::networking::client_packets::{Disconnect, DisconnectPacketBuilder, Ready, ReadyPacketBuilder, SnakeMovement, SnakeMovementPacketBuilder, StartNewGame, StartNewGamePacketBuilder};
 use crate::networking::server_packets::{EatFood, ReadyAck, SnakePositions, SpawnFood, SpawnSnake, SpawnTail, StartNewGameAck};

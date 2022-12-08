@@ -4,7 +4,7 @@ use bevy::window::WindowCloseRequested;
 use iyes_loopless::prelude::{AppLooplessStateExt, IntoConditionalSystem};
 use iyes_loopless::state::NextState;
 
-use networking::packet::PacketManager;
+use durian::PacketManager;
 
 use crate::client::resources::{ClientInfo, ClientPacketManager};
 use crate::networking::client_packets::{Disconnect, Ready, SnakeMovement, StartNewGame};

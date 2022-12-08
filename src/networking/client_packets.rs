@@ -1,4 +1,5 @@
-use networking_macros::bincode_packet;
+use durian::bincode_packet;
+
 use crate::common::components::Direction;
 
 #[bincode_packet]

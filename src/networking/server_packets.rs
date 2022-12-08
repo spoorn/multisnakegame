@@ -1,6 +1,5 @@
+use durian::bincode_packet;
 use serde::{Deserialize, Serialize};
-
-use networking_macros::bincode_packet;
 
 use crate::common::components::Direction;
 

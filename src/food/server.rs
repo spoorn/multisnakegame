@@ -20,7 +20,7 @@ pub struct FoodServerPlugin;
 impl Plugin for FoodServerPlugin {
     fn build(&self, app: &mut App) {
         app.add_system(eat_food.run_in_state(GameState::Running).label(SnakeState::EatFood).after(SnakeState::Movement))
-            .add_fixed_timestep(Duration::from_millis(1000), "spawn_food")
+            .add_fixed_timestep(Duration::from_millis(100), "spawn_food")
             .add_fixed_timestep_system("spawn_food", 0, auto_spawn_food.run_in_state(GameState::Running));
     }
 }
