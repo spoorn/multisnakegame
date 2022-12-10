@@ -45,7 +45,7 @@ fn wait_for_start_game_ack(mut commands: Commands, mut manager: ResMut<ServerPac
             let b = thread_rng().gen_range(0.1..=1.0) as f32;
             info!("[server] Spawned snake at {}, {}", x, y);
             spawn_snake(&mut commands, snake_id.id, Position { x, y }, Color::rgb(r, g, b));
-            let client_id = manager.get_client_id(addr) as u8;
+            let client_id = manager.get_client_id(addr).unwrap() as u8;
             manager.manager.send_to(addr, StartNewGameAck { client_id, num_snakes: server_info.want_num_clients }).unwrap();
             // TODO: This can probably be optimized rather than broadcasting to all clients everytime, but this is simple
             // Previously spawned snakes.  Assumes client handles duplicates
@@ -66,7 +66,7 @@ fn update_snake_movement(mut head_positions: Query<&mut SnakeHead>, mut manager:
             for head in head_positions.iter_mut() {
                 snakes.insert(head.id, head);
             }
-            let client_id = manager.get_client_id(addr) as u8;
+            let client_id = manager.get_client_id(addr).unwrap() as u8;
 
             for movement in movements.iter() {
                 if movement.id == client_id {
