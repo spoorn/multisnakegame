@@ -1,10 +1,9 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy::window::WindowCloseRequested;
+use durian::{ClientConfig, PacketManager};
 use iyes_loopless::prelude::{AppLooplessStateExt, IntoConditionalSystem};
 use iyes_loopless::state::NextState;
-
-use durian::PacketManager;
 
 use crate::client::resources::{ClientInfo, ClientPacketManager};
 use crate::networking::client_packets::{Disconnect, Ready, SnakeMovement, StartNewGame};
@@ -41,7 +40,7 @@ fn send_start_game_packet(mut commands: Commands, client_info: Res<ClientInfo>) 
     manager.register_send_packet::<Disconnect>().unwrap();
     manager.register_send_packet::<SnakeMovement>().unwrap();
     manager.register_send_packet::<Ready>().unwrap();
-    manager.init_connections(false, 7, 4, client_info.server_addr.to_owned(), Some(client_info.client_addr.to_owned()), 1, None).unwrap();
+    manager.init_client(ClientConfig::new(client_info.client_addr.to_owned(), client_info.server_addr.to_owned(), 7, 4)).unwrap();
     
     manager.send(StartNewGame).unwrap();
 

@@ -22,6 +22,7 @@ impl Plugin for SnakeClientPlugin {
             .add_system(wait_for_ack.run_in_state(GameState::ConnectToServer))
             .add_system(pre_game.run_in_state(GameState::PreGame))
             .add_system(update_snake_positions.run_in_state(GameState::Running).label(SnakeState::Movement))
+            .add_system(handle_spawn_tail.run_in_state(GameState::Running).after(SnakeState::Movement))
             .add_system(snake_movement_input.run_in_state(GameState::Running).after(SnakeState::Movement));
     }
 }
@@ -62,7 +63,7 @@ fn pre_game(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mu
     }
 }
 
-fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mut q: Query<(&mut Position, &mut SnakeHead)>, mut tail_positions: Query<&mut Position, (Without<SnakeHead>, Without<Food>)>) {
+fn update_snake_positions(mut manager: ResMut<ClientPacketManager>, mut q: Query<(&mut Position, &mut SnakeHead)>, mut tail_positions: Query<&mut Position, (Without<SnakeHead>, Without<Food>)>) {
     let snake_positions = manager.manager.received::<SnakePositions, SnakePositionsPacketBuilder>(false).unwrap();
     if let Some(snake_positions) = snake_positions {
         let mut snakes = HashMap::new();
@@ -82,7 +83,6 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
                         head.input_direction = orientation.input_direction;
                         head.direction = orientation.direction;
 
-                        let client_tail_len = head.tail.len();
                         let server_tail_len = orientation.tail_positions.len();
 
                         // Only modify the old tail positions, new ones should already be in the right place
@@ -93,14 +93,6 @@ fn update_snake_positions(mut commands: Commands, mut manager: ResMut<ClientPack
                             let mut tail_pos = tail_positions.get_mut(*entity).unwrap();
                             tail_pos.x = orientation.tail_positions[i].0;
                             tail_pos.y = orientation.tail_positions[i].1;
-                        }
-
-                        // Tails were spawned on server side, spawn on client as well
-                        // TODO: instead we can just spawn tails manually above to avoid lag, and remove SpawnTail packet,
-                        if client_tail_len < server_tail_len {
-                            // This is a blocking call
-                            let head_color = head.color;
-                            head.tail.append(&mut handle_spawn_tail(&mut commands, &mut manager, head_color));
                         }
                     }
                 }
@@ -133,13 +125,25 @@ fn snake_movement_input(keys: Res<Input<KeyCode>>, mut head_positions: Query<&mu
     }
 }
 
-fn handle_spawn_tail(mut commands: &mut Commands, mut manager: &mut ClientPacketManager, head_color: Color) -> Vec<Entity> {
+fn handle_spawn_tail(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mut q: Query<(&mut Position, &mut SnakeHead)>) {
     let spawn_tails = manager.manager.received::<SpawnTail, SpawnTailPacketBuilder>(false).unwrap();
-    let mut tail_entities = vec![];
     if let Some(spawn_tails) = spawn_tails {
         for st in spawn_tails.iter() {
-            tail_entities.push(spawn_tail(&mut commands, Position { x: st.position.0, y: st.position.1 }, None, st.id, head_color));
+            let mut snakes = HashMap::new();
+            for (pos, head) in q.iter_mut() {
+                snakes.insert(head.id, (pos, head));
+            }
+
+            match snakes.get_mut(&st.id) {
+                None => {
+                    panic!("[client] Snake with ID {} does not exist!", st.id);
+                }
+                Some((_pos, head)) => {
+                    let head_color = head.color;
+                    head.tail.push(spawn_tail(&mut commands, Position { x: st.position.0, y: st.position.1 }, None, st.id, &head_color));
+                    info!("[client] Spawned tail at {}, {} for Snake Id {}", st.position.0, st.position.1, st.id);
+                }
+            }
         }
     }
-    tail_entities
 }

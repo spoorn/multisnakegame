@@ -47,7 +47,7 @@ pub fn spawn_snake(commands: &mut Commands, snake_id: u8, position: Position, co
         .insert(Size::square(0.8));
 }
 
-pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>, id: u8, head_color: Color) -> Entity {
+pub fn spawn_tail(commands: &mut Commands, position: Position, mut manager: Option<&mut ServerPacketManager>, id: u8, head_color: &Color) -> Entity {
     let res = commands
         .spawn_bundle(SpriteBundle {
             sprite: Sprite {

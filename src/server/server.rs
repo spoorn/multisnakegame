@@ -1,6 +1,6 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use durian::PacketManager;
+use durian::{PacketManager, ServerConfig};
 use iyes_loopless::prelude::{AppLooplessStateExt, IntoConditionalSystem};
 use iyes_loopless::state::NextState;
 
@@ -38,7 +38,7 @@ fn setup_packet_manager(mut commands: Commands, server_info: Res<ServerInfo>) {
     manager.register_send_packet::<SpawnFood>().unwrap();
     manager.register_send_packet::<EatFood>().unwrap();
     manager.register_send_packet::<SpawnTail>().unwrap();
-    manager.init_connections(true, 4, 7, server_info.server_addr.to_owned(), None, 1, Some(server_info.want_num_clients as u32)).unwrap();
+    manager.init_server(ServerConfig::new(server_info.server_addr.to_owned(), 1, Some(server_info.want_num_clients as u32), 4, 7)).unwrap();
     
     commands.insert_resource(ServerPacketManager { manager });
 }
