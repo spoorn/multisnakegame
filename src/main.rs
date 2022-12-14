@@ -20,6 +20,7 @@ mod ui;
 mod client;
 mod server;
 mod networking;
+mod lobby;
 
 fn hide_console_window() {
     use std::ptr;
@@ -38,8 +39,9 @@ fn hide_console_window() {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let client_or_server = if args.len() >= 2 { &args[1] } else { "client" };
-    let server_addr = if args.len() >= 3 { args[2].to_owned() } else { "192.168.1.243:5000".to_string() };
+    let server_addr = if args.len() >= 3 { args[2].to_owned() } else { "192.168.1.243:28154".to_string() };
     let client_addr = if args.len() >= 4 { args[3].to_owned() } else { "0.0.0.0:5001".to_string() };
+    let lobby_server_addr = if args.len() >= 4 { args[3].to_owned() } else { "192.168.1.243:28153".to_string() };
     
     if client_or_server != "client" {
         let server_addr = server_addr.clone();
@@ -106,7 +108,7 @@ fn main() {
             .add_plugin(food::client::FoodClientPlugin)
             .add_plugin(snake::SnakePlugin)
             .add_plugin(snake::client::SnakeClientPlugin)
-            .add_plugin(client::client::ClientPlugin { client_addr, server_addr: server_addr.clone() })
+            .add_plugin(client::client::ClientPlugin { client_addr, lobby_server_addr: lobby_server_addr.clone(), server_addr: server_addr.clone() })
             .run();
     }
 }

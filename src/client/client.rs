@@ -7,11 +7,14 @@ use iyes_loopless::state::NextState;
 
 use crate::client::resources::{ClientInfo, ClientPacketManager};
 use crate::networking::client_packets::{Disconnect, Ready, SnakeMovement, StartNewGame};
+use crate::networking::lobby::client_packets::{CancelLobby, CreateLobby, JoinLobby, LeaveLobby};
+use crate::networking::lobby::server_packets::{CreateLobbySuccess, CreateLobbySuccessPacketBuilder, LobbyCanceled, LobbyCanceledPacketBuilder, PlayerJoined, PlayerJoinedPacketBuilder, PlayerLeft, PlayerLeftPacketBuilder};
 use crate::networking::server_packets::{EatFood, EatFoodPacketBuilder, ReadyAck, ReadyAckPacketBuilder, SnakePositions, SnakePositionsPacketBuilder, SpawnFood, SpawnFoodPacketBuilder, SpawnSnake, SpawnSnakePacketBuilder, SpawnTail, SpawnTailPacketBuilder, StartNewGameAck, StartNewGameAckPacketBuilder};
 use crate::state::GameState;
 
 pub struct ClientPlugin {
     pub client_addr: String,
+    pub lobby_server_addr: String,
     pub server_addr: String
 }
 
@@ -19,15 +22,31 @@ impl Plugin for ClientPlugin {
     
     fn build(&self, app: &mut App) {
         app
-            .insert_resource(ClientInfo { client_addr: self.client_addr.to_owned(), server_addr: self.server_addr.to_owned() })
+            .insert_resource(ClientInfo { client_addr: self.client_addr.to_owned(), lobby_server_addr: self.lobby_server_addr.to_owned(), server_addr: self.server_addr.to_owned() })
             .add_startup_system(setup_client)
             .add_system(wait_for_ready_ack.run_in_state(GameState::PreGame))
             .add_system(exit_system.run_not_in_state(GameState::MainMenu))
-            .add_enter_system(GameState::ConnectToServer, send_start_game_packet);
+            .add_enter_system(GameState::ConnectToServer, init_client);
     }
 }
 
-fn send_start_game_packet(mut commands: Commands, client_info: Res<ClientInfo>) {
+fn init_lobby_client(mut commands: Commands, client_info: Res<ClientInfo>) {
+    let mut manager = PacketManager::new();
+    manager.register_receive_packet::<CreateLobbySuccess>(CreateLobbySuccessPacketBuilder).unwrap();
+    manager.register_receive_packet::<PlayerJoined>(PlayerJoinedPacketBuilder).unwrap();
+    manager.register_receive_packet::<PlayerLeft>(PlayerLeftPacketBuilder).unwrap();
+    manager.register_receive_packet::<LobbyCanceled>(LobbyCanceledPacketBuilder).unwrap();
+    manager.register_send_packet::<CreateLobby>().unwrap();
+    manager.register_send_packet::<CancelLobby>().unwrap();
+    manager.register_send_packet::<JoinLobby>().unwrap();
+    manager.register_send_packet::<LeaveLobby>().unwrap();
+
+    manager.init_client(ClientConfig::new(client_info.client_addr.to_owned(), client_info.lobby_server_addr.to_owned(), 4, 4)).unwrap();
+
+    commands.insert_resource(ClientPacketManager { manager });
+}
+
+fn init_client(mut commands: Commands, client_info: Res<ClientInfo>) {
     let mut manager = PacketManager::new();
     manager.register_receive_packet::<StartNewGameAck>(StartNewGameAckPacketBuilder).unwrap();
     manager.register_receive_packet::<SpawnSnake>(SpawnSnakePacketBuilder).unwrap();

@@ -48,7 +48,7 @@ fn handle_spawn_food(mut manager: ResMut<ClientPacketManager>,
 
 fn handle_eat_food(mut commands: Commands, mut manager: ResMut<ClientPacketManager>, mut to_eat: ResMut<ToEatfood>, foods: Query<(Entity, &Position), With<Food>>) {
     // TODO: optimize
-    let mut pos_to_food;
+    let pos_to_food;
     
     let eat_foods = manager.manager.received::<EatFood, EatFoodPacketBuilder>(false).unwrap();
     let has_to_eat = !to_eat.positions.is_empty();
